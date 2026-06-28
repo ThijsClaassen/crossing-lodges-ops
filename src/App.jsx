@@ -212,7 +212,7 @@ const css = `
   ::-webkit-scrollbar-track{background:transparent}
   ::-webkit-scrollbar-thumb{background:${T.border};border-radius:3px}
 
-  /* ‚îÄ‚îÄ MOBILE STYLES (‚â§ 768px) ‚îÄ‚îÄ */
+  /* ‚îÄ‚îÄ MOBILE STYLES (<= 768px) ‚îÄ‚îÄ */
   @media (max-width: 768px) {
     /* Hide desktop sidebar, show bottom nav */
     .sidebar{display:none}
@@ -441,7 +441,7 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
     if(variance===null)return null;
     return(
       <div style={{display:"inline-flex",alignItems:"center",gap:8,background:varOk?"rgba(90,155,106,.14)":"rgba(192,80,80,.14)",border:`1px solid ${varOk?T.ok:T.danger}`,borderRadius:6,padding:"7px 13px",marginBottom:16}}>
-        <span style={{fontSize:17}}>{varOk?"‚úÖ":"‚ö†Ô∏è"}</span>
+        <span style={{fontSize:17}}>{varOk?"OK":"!"}</span>
         <div>
           <div style={{fontSize:12,fontWeight:700,color:varOk?T.ok:T.danger}}>Variance: {variance>0?"+":""}{variance.toFixed(0)} L</div>
           <div style={{fontSize:11,color:T.muted}}>{varOk?"Within acceptable range":"Investigate ‚Äî possible unlogged draw or meter drift"}</div>
@@ -483,10 +483,10 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
                   <td>{i.vehicle?<span className="badge badge-d">{i.vehicle}</span>:<span style={{color:T.muted,fontSize:11}}>Unallocated</span>}</td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{i.mileage||"‚Äî"}</td>
                   <td style={{fontSize:12,color:T.muted}}>{i.notes}</td>
-                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselIssues:issues.filter(x=>x.id!==i.id)})}>‚úï</button></td>
+                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselIssues:issues.filter(x=>x.id!==i.id)})}>x</button></td>
                 </tr>
               ))}
-              {issues.length===0&&<tr><td colSpan={8} className="empty"><div className="empty-icon">üìã</div>No issues logged yet</td></tr>}
+              {issues.length===0&&<tr><td colSpan={8} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No issues logged yet</td></tr>}
             </tbody>
           </table></div>
           {issues.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(74,124,181,.08)",border:`1px solid rgba(74,124,181,.25)`,borderRadius:6}}>
@@ -514,10 +514,10 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
                   <td style={{fontSize:12}}>{d.supplier||<span style={{color:T.muted}}>‚Äî</span>}</td>
                   <td>{d.invoiceNo?<span className="badge badge-v">#{d.invoiceNo}</span>:<span style={{color:T.muted}}>‚Äî</span>}</td>
                   <td style={{fontSize:12,color:T.muted}}>{d.notes}</td>
-                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDeliveries:deliveries.filter(x=>x.id!==d.id)})}>‚úï</button></td>
+                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDeliveries:deliveries.filter(x=>x.id!==d.id)})}>x</button></td>
                 </tr>
               ))}
-              {deliveries.length===0&&<tr><td colSpan={8} className="empty"><div className="empty-icon">üöõ</div>No deliveries recorded yet</td></tr>}
+              {deliveries.length===0&&<tr><td colSpan={8} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No deliveries recorded yet</td></tr>}
             </tbody>
           </table></div>
           {deliveries.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(90,155,106,.08)",border:`1px solid rgba(90,155,106,.25)`,borderRadius:6,display:"flex",gap:24}}>
@@ -572,7 +572,7 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
               </tbody>
             </table></div>
           )}
-          {byVehicle.length===0&&deliveries.length===0&&<div className="empty"><div className="empty-icon">‚õΩ</div>Log deliveries and issues to see the stock position</div>}
+          {byVehicle.length===0&&deliveries.length===0&&<div className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>Log deliveries and issues to see the stock position</div>}
         </>
       )}
 
@@ -595,11 +595,11 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
                     <td className="num" style={{color:T.muted}}>{fmtL(Math.max(0,theoretical))}</td>
                     <td className={`num ${ok?"ok":"bad"}`} style={{fontWeight:700}}>{v>0?"+":""}{v.toFixed(0)} L</td>
                     <td style={{fontSize:12,color:T.muted}}>{d.notes}</td>
-                    <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDips:dips.filter(x=>x.id!==d.id)})}>‚úï</button></td>
+                    <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDips:dips.filter(x=>x.id!==d.id)})}>x</button></td>
                   </tr>
                 );
               })}
-              {dips.length===0&&<tr><td colSpan={6} className="empty"><div className="empty-icon">üìè</div>No dip readings yet</td></tr>}
+              {dips.length===0&&<tr><td colSpan={6} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No dip readings yet</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -665,7 +665,7 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
                 <strong style={{fontFamily:"'Space Mono'",color:ok?T.ok:T.danger}}>{v>0?"+":""}{v.toFixed(0)} L</strong>
               </div>;
             })()}
-            <div className="field"><label>Notes</label><input type="text" placeholder="Who dipped, conditions‚Ä¶" value={dipForm.notes} onChange={e=>setDipForm(f=>({...f,notes:e.target.value}))}/></div>
+            <div className="field"><label>Notes</label><input type="text" placeholder="Who dipped, conditions..." value={dipForm.notes} onChange={e=>setDipForm(f=>({...f,notes:e.target.value}))}/></div>
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addDip}>Save Dip</button><button className="btn btn-ghost" onClick={()=>setShowDip(false)}>Cancel</button></div>
           </div>
         </div>
@@ -738,10 +738,10 @@ function PetrolInventory({ loc, setLoc, fleet }) {
                   <td>{i.vehicle?<span className="badge badge-p">{i.vehicle}</span>:<span style={{color:T.muted,fontSize:11}}>Unallocated</span>}</td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{i.mileage||"‚Äî"}</td>
                   <td style={{fontSize:12,color:T.muted}}>{i.notes}</td>
-                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({petrolIssues:issues.filter(x=>x.id!==i.id)})}>‚úï</button></td>
+                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({petrolIssues:issues.filter(x=>x.id!==i.id)})}>x</button></td>
                 </tr>
               ))}
-              {issues.length===0&&<tr><td colSpan={6} className="empty"><div className="empty-icon">üî¥</div>No issues logged yet</td></tr>}
+              {issues.length===0&&<tr><td colSpan={6} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No issues logged yet</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -763,10 +763,10 @@ function PetrolInventory({ loc, setLoc, fleet }) {
                   <td className="num">{fmtR((p.litres||0)*(p.pricePerLitre||0))}</td>
                   <td style={{fontSize:12}}>{p.station||<span style={{color:T.muted}}>‚Äî</span>}</td>
                   <td style={{fontSize:12,color:T.muted}}>{p.notes}</td>
-                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({petrolPurchases:purchases.filter(x=>x.id!==p.id)})}>‚úï</button></td>
+                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({petrolPurchases:purchases.filter(x=>x.id!==p.id)})}>x</button></td>
                 </tr>
               ))}
-              {purchases.length===0&&<tr><td colSpan={7} className="empty"><div className="empty-icon">‚õΩ</div>No purchases yet</td></tr>}
+              {purchases.length===0&&<tr><td colSpan={7} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No purchases yet</td></tr>}
             </tbody>
           </table></div>
           {purchases.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(90,155,106,.08)",border:`1px solid rgba(90,155,106,.25)`,borderRadius:6,display:"flex",gap:24}}>
@@ -814,7 +814,7 @@ function PetrolInventory({ loc, setLoc, fleet }) {
               </tbody>
             </table></div>
           )}
-          {byVehicle.length===0&&purchases.length===0&&<div className="empty"><div className="empty-icon">‚õΩ</div>Log purchases and issues to see the stock position</div>}
+          {byVehicle.length===0&&purchases.length===0&&<div className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>Log purchases and issues to see the stock position</div>}
         </>
       )}
 
@@ -899,7 +899,7 @@ function PartsStock({ loc, setLoc }) {
             return(
               <tr key={p.id}>
                 <td style={{fontWeight:600}}>{p.description}</td>
-                <td style={{fontSize:11,color:T.muted}}>{[p.storeroom,p.shelf,p.location].filter(Boolean).join(" ¬∑ ")}</td>
+                <td style={{fontSize:11,color:T.muted}}>{[p.storeroom,p.shelf,p.location].filter(Boolean).join(" - ")}</td>
                 <td><span className="badge badge-v">{p.unit}</span></td>
                 <td className="num">{p.openQty}</td>
                 <td className="num">{fmtR(p.openCost)}</td>
@@ -908,11 +908,11 @@ function PartsStock({ loc, setLoc }) {
                 <td style={{fontSize:12,color:T.muted}}>{p.purchaseFrom}</td>
                 <td className="num">{p.closingQty}</td>
                 <td className="num">{fmtR((p.closingQty||0)*w)}</td>
-                <td><button className="btn btn-danger btn-sm" onClick={()=>upd({parts:parts.filter(x=>x.id!==p.id)})}>‚úï</button></td>
+                <td><button className="btn btn-danger btn-sm" onClick={()=>upd({parts:parts.filter(x=>x.id!==p.id)})}>x</button></td>
               </tr>
             );
           })}
-          {parts.length===0&&<tr><td colSpan={11} className="empty"><div className="empty-icon">üîß</div>No parts recorded at this location</td></tr>}
+          {parts.length===0&&<tr><td colSpan={11} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No parts recorded at this location</td></tr>}
         </tbody>
       </table></div>
       {showForm&&(
@@ -1008,16 +1008,16 @@ function Repairs({ loc, setLoc, fleet }) {
               <td className="num">{parseFloat(r.partsCost)>0?fmtR(r.partsCost):<span style={{color:T.muted}}>‚Äî</span>}</td>
               <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.totalCost||0)}</td>
               <td>{r.invoiceNo?<span className="badge badge-v">#{r.invoiceNo}</span>:r.invoiceReceived?<span className="badge badge-d">Received</span>:<span className="badge" style={{background:"rgba(192,80,80,.15)",color:T.danger,border:"1px solid rgba(192,80,80,.3)"}}>Pending</span>}</td>
-              <td onClick={e=>e.stopPropagation()}><button className="btn btn-danger btn-sm" onClick={()=>upd({repairs:repairs.filter(x=>x.id!==r.id)})}>‚úï</button></td>
+              <td onClick={e=>e.stopPropagation()}><button className="btn btn-danger btn-sm" onClick={()=>upd({repairs:repairs.filter(x=>x.id!==r.id)})}>x</button></td>
             </tr>
           ))}
-          {repairs.length===0&&<tr><td colSpan={9} className="empty"><div className="empty-icon">üîß</div>No repairs logged at this location</td></tr>}
+          {repairs.length===0&&<tr><td colSpan={9} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No repairs logged at this location</td></tr>}
         </tbody>
       </table></div>
       {viewEntry&&(
         <div className="overlay" onClick={e=>e.target===e.currentTarget&&setViewEntry(null)}>
           <div className="modal" style={{maxWidth:540}}>
-            <div className="modal-title">üîß Repair Detail <button className="btn btn-ghost btn-sm" style={{marginLeft:"auto"}} onClick={()=>setViewEntry(null)}>Close</button></div>
+            <div className="modal-title">* Repair Detail <button className="btn btn-ghost btn-sm" style={{marginLeft:"auto"}} onClick={()=>setViewEntry(null)}>Close</button></div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 18px",marginBottom:16}}>
               {[["Date",viewEntry.date],["Vehicle",fleet.find(v=>v.id===viewEntry.vehicle)?.name||viewEntry.vehicle||"‚Äî"],["Workshop",viewEntry.workshop||"‚Äî"],["Invoice #",viewEntry.invoiceNo||"‚Äî"]].map(([l,v])=>(
                 <div key={l} style={{padding:"9px 0",borderBottom:`1px solid ${T.border}`}}>
@@ -1062,7 +1062,7 @@ function Repairs({ loc, setLoc, fleet }) {
               <div className="field"><label>Invoice Number</label><input type="text" value={form.invoiceNo} onChange={e=>setForm(f=>({...f,invoiceNo:e.target.value}))}/></div>
             </div>
             <div className="field"><label>Work Description</label>
-              <textarea rows={3} placeholder="Describe what was repaired or replaced‚Ä¶" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} style={{width:"100%",background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Inter',sans-serif",fontSize:13,outline:"none",resize:"vertical"}} onFocus={e=>e.target.style.borderColor=T.gold} onBlur={e=>e.target.style.borderColor=T.border}/>
+              <textarea rows={3} placeholder="Describe what was repaired or replaced..." value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} style={{width:"100%",background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Inter',sans-serif",fontSize:13,outline:"none",resize:"vertical"}} onFocus={e=>e.target.style.borderColor=T.gold} onBlur={e=>e.target.style.borderColor=T.border}/>
             </div>
             <div className="grid3">
               <div className="field"><label>Labour (R)</label><input type="number" min="0" value={form.labourCost} onChange={e=>setForm(f=>({...f,labourCost:e.target.value}))}/></div>
@@ -1234,7 +1234,7 @@ function CostSummary({ locData, fleet }) {
 
     return Object.entries(m).map(([id, d]) => {
       const total = d.fuel + d.parts + d.repairs;
-      // km driven = highest odometer ‚àí lowest odometer seen this month
+      // km driven = highest odometer - lowest odometer seen this month
       const readings = d.odomReadings;
       const kmDriven = readings.length >= 2
         ? Math.max(...readings) - Math.min(...readings)
@@ -1295,7 +1295,7 @@ function CostSummary({ locData, fleet }) {
       {ytd.length > 0 && withCpkm.length === 0 && (
         <div style={{background:"rgba(201,125,58,.07)",border:`1px solid rgba(201,125,58,.22)`,borderRadius:6,
           padding:"9px 13px",marginBottom:16,fontSize:12,color:T.muted}}>
-          üí° Cost/km is calculated from odometer readings on fuel issues. Add mileage when logging diesel or petrol issues to see cost per km.
+          Tip: Cost/km is calculated from odometer readings on fuel issues. Add mileage when logging diesel or petrol issues to see cost per km.
         </div>
       )}
 
@@ -1374,13 +1374,13 @@ function CostSummary({ locData, fleet }) {
 
 // ‚îÄ‚îÄ‚îÄ ROOT APP ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
 const PAGES = [
-  { id:"dashboard", label:"Dashboard",     icon:"üìä", section:"Overview"   },
-  { id:"diesel",    label:"Diesel",        icon:"‚õΩ", section:"Fuel"       },
-  { id:"petrol",    label:"Petrol",        icon:"üî¥", section:"Fuel"       },
-  { id:"parts",     label:"Parts & Stock", icon:"üîß", section:"Mechanical" },
-  { id:"repairs",   label:"Repairs",       icon:"üèóÔ∏è", section:"Mechanical" },
-  { id:"fleet",     label:"Fleet",         icon:"üöó", section:"Management" },
-  { id:"costs",     label:"Cost Summary",  icon:"üí∞", section:"Reports"    },
+  { id:"dashboard", label:"Dashboard",     section:"Overview"   },
+  { id:"diesel",    label:"Diesel",        section:"Fuel"       },
+  { id:"petrol",    label:"Petrol",        section:"Fuel"       },
+  { id:"parts",     label:"Parts & Stock", section:"Mechanical" },
+  { id:"repairs",   label:"Repairs",       section:"Mechanical" },
+  { id:"fleet",     label:"Fleet",         section:"Management" },
+  { id:"costs",     label:"Cost Summary",  section:"Reports"    },
 ];
 
 const emptyLoc = () => ({
@@ -1518,7 +1518,7 @@ export default function App() {
       <style>{css}</style>
       <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",gap:16,background:T.bg}}>
         <img src={LOGO_DATA} alt="Crossing Lodges" style={{width:160,filter:"brightness(0) invert(1) opacity(.8)"}}/>
-        <div style={{fontSize:13,color:T.muted,letterSpacing:".1em",textTransform:"uppercase"}}>Loading operations data‚Ä¶</div>
+        <div style={{fontSize:13,color:T.muted,letterSpacing:".1em",textTransform:"uppercase"}}>Loading operations data...</div>
         <div style={{width:220,height:3,background:T.border,borderRadius:2,overflow:"hidden"}}>
           <div style={{height:"100%",background:T.gold,borderRadius:2,width:"40%",animation:"ldg 1.2s ease-in-out infinite"}}/>
         </div>
@@ -1531,7 +1531,7 @@ export default function App() {
     <>
       <style>{css}</style>
       <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",gap:12,background:T.bg,padding:32}}>
-        <div style={{fontSize:32}}>‚ö†Ô∏è</div>
+        <div style={{fontSize:32}}>!</div>
         <div style={{fontSize:16,fontWeight:700,color:T.cream}}>Could not connect to database</div>
         <div style={{fontSize:13,color:T.muted,textAlign:"center",maxWidth:400}}>{loadErr}</div>
         <button className="btn btn-primary" style={{marginTop:12}} onClick={loadAll}>Retry</button>
@@ -1541,11 +1541,11 @@ export default function App() {
 
   // Bottom nav pages (most used on mobile ‚Äî keep to 5 max)
   const BOTTOM_NAV = [
-    { id:"diesel",    label:"Diesel",   icon:"‚õΩ" },
-    { id:"petrol",    label:"Petrol",   icon:"üî¥" },
-    { id:"repairs",   label:"Repairs",  icon:"üèóÔ∏è" },
-    { id:"fleet",     label:"Fleet",    icon:"üöó" },
-    { id:"costs",     label:"Costs",    icon:"üí∞" },
+    { id:"diesel",    label:"Diesel"   },
+    { id:"petrol",    label:"Petrol"   },
+    { id:"repairs",   label:"Repairs"  },
+    { id:"fleet",     label:"Fleet"    },
+    { id:"costs",     label:"Costs"    },
   ];
 
   return (
@@ -1575,7 +1575,6 @@ export default function App() {
                 <div className="nav-section">{sec}</div>
                 {PAGES.filter(p=>p.section===sec).map(p=>(
                   <button key={p.id} className={`nav-item${page===p.id?" active":""}`} onClick={()=>setPage(p.id)}>
-                    <span className="nav-icon">{p.icon}</span>
                     {p.label}
                   </button>
                 ))}
@@ -1585,9 +1584,9 @@ export default function App() {
 
           <div style={{padding:"13px 18px",borderTop:`1px solid ${T.border}`,fontSize:10,color:T.muted,lineHeight:1.6}}>
             <div style={{color:T.gold,fontWeight:700,marginBottom:2}}>{footerDate}</div>
-            Modimolle, Limpopo ¬∑ ZA
+            Modimolle, Limpopo - ZA
             <div style={{marginTop:6}}>
-              <button onClick={loadAll} style={{background:"none",border:"none",color:T.muted,fontSize:10,cursor:"pointer",padding:0,letterSpacing:".05em"}}>‚Üª Refresh</button>
+              <button onClick={loadAll} style={{background:"none",border:"none",color:T.muted,fontSize:10,cursor:"pointer",padding:0,letterSpacing:".05em"}}>R Refresh</button>
             </div>
           </div>
         </div>
@@ -1596,7 +1595,7 @@ export default function App() {
         <div className="main">
           {/* Topbar */}
           <div className="topbar" style={{position:"sticky",top:0,zIndex:10}}>
-            <div className="page-title">{current?.icon} {current?.label}</div>
+            <div className="page-title">{current?.label}</div>
             <div style={{display:"flex",gap:8,alignItems:"center"}}>
               {page!=="costs"&&page!=="fleet"&&(
                 <span className="loc-badge" style={{background:`${locColor}22`,border:`1px solid ${locColor}55`,color:locColor}}>
@@ -1616,7 +1615,7 @@ export default function App() {
                 {l.name}
               </button>
             ))}
-            <button onClick={loadAll} style={{marginLeft:"auto",background:"none",border:"none",color:T.muted,fontSize:11,cursor:"pointer",padding:"4px 8px",flexShrink:0}}>‚Üª</button>
+            <button onClick={loadAll} style={{marginLeft:"auto",background:"none",border:"none",color:T.muted,fontSize:11,cursor:"pointer",padding:"4px 8px",flexShrink:0}}>R</button>
           </div>
 
           <div className="section">
@@ -1634,7 +1633,6 @@ export default function App() {
         <nav className="bottom-nav">
           {BOTTOM_NAV.map(p=>(
             <button key={p.id} className={`bn-item${page===p.id?" active":""}`} onClick={()=>setPage(p.id)}>
-              <span className="bn-icon">{p.icon}</span>
               {p.label}
             </button>
           ))}
