@@ -394,7 +394,7 @@ function Dashboard({ locId, loc, fleet }) {
 }
 
 // ‚îÄ‚îÄ‚îÄ DIESEL INVENTORY ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
-function DieselInventory({ locId, loc, setLoc, fleet }) {
+function DieselInventory({ locId, loc, setLoc, fleet, isAdmin }) {
   const [tab, setTab]             = useState("issues");
   const [showDelivery, setShowDelivery] = useState(false);
   const [showIssue,    setShowIssue]    = useState(false);
@@ -460,7 +460,10 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
         {label:lastDip!==null?"Last Dip":"No Dip Yet",val:lastDip!==null?fmtL(lastDip):"‚Äî",accent:varOk?T.ok:variance!==null?T.danger:T.muted},
       ]}/>
       <div className="tabs">
-        {[{id:"issues",label:"Issues (Meter)"},{id:"deliveries",label:"Deliveries"},{id:"stock",label:"Stock Position"},{id:"dips",label:"Dip Checks"}].map(t=>(
+        {(isAdmin
+          ? [{id:"issues",label:"Issues (Meter)"},{id:"deliveries",label:"Deliveries"},{id:"stock",label:"Stock Position"},{id:"dips",label:"Dip Checks"}]
+          : [{id:"issues",label:"Issues (Meter)"},{id:"dips",label:"Dip Checks"}]
+        ).map(t=>(
           <button key={t.id} className={`tab${tab===t.id?" active":""}`} onClick={()=>setTab(t.id)}>{t.label}</button>
         ))}
       </div>
@@ -483,7 +486,7 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
                   <td>{i.vehicle?<span className="badge badge-d">{i.vehicle}</span>:<span style={{color:T.muted,fontSize:11}}>Unallocated</span>}</td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{i.mileage||"‚Äî"}</td>
                   <td style={{fontSize:12,color:T.muted}}>{i.notes}</td>
-                  <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselIssues:issues.filter(x=>x.id!==i.id)})}>x</button></td>
+                  <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({dieselIssues:issues.filter(x=>x.id!==i.id)})}>x</button>}</td>
                 </tr>
               ))}
               {issues.length===0&&<tr><td colSpan={8} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No issues logged yet</td></tr>}
@@ -497,7 +500,7 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
       )}
 
       {/* DELIVERIES */}
-      {tab==="deliveries"&&(
+      {tab==="deliveries"&&isAdmin&&(
         <>
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
             <button className="btn btn-primary" onClick={()=>setShowDelivery(true)}>+ Log Delivery</button>
@@ -529,7 +532,7 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
       )}
 
       {/* STOCK POSITION */}
-      {tab==="stock"&&(
+      {tab==="stock"&&isAdmin&&(
         <>
           <VariancePill/>
           <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
@@ -595,7 +598,7 @@ function DieselInventory({ locId, loc, setLoc, fleet }) {
                     <td className="num" style={{color:T.muted}}>{fmtL(Math.max(0,theoretical))}</td>
                     <td className={`num ${ok?"ok":"bad"}`} style={{fontWeight:700}}>{v>0?"+":""}{v.toFixed(0)} L</td>
                     <td style={{fontSize:12,color:T.muted}}>{d.notes}</td>
-                    <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDips:dips.filter(x=>x.id!==d.id)})}>x</button></td>
+                    <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDips:dips.filter(x=>x.id!==d.id)})}>x</button>}</td>
                   </tr>
                 );
               })}
@@ -864,17 +867,33 @@ function PetrolInventory({ loc, setLoc, fleet }) {
 }
 
 // ‚îÄ‚îÄ‚îÄ PARTS & STOCK ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
-function PartsStock({ loc, setLoc }) {
+function PartsStock({ loc, setLoc, isAdmin, fleet }) {
   const parts=loc.parts;
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
+  const [showIssue,setShowIssue]=useState(false);
   const [form,setForm]=useState({description:"",storeroom:"",shelf:"",location:"",unit:"each",openCost:"",openQty:"",purchaseQty:"",purchaseCost:"",purchaseFrom:"",closingQty:""});
+  const [issueForm,setIssueForm]=useState({partId:"",vehicle:"",qty:""});
 
   const addPart=()=>{
     const p={...form,id:uid(),openCost:parseFloat(form.openCost)||0,openQty:parseFloat(form.openQty)||0,purchaseQty:parseFloat(form.purchaseQty)||0,purchaseCost:parseFloat(form.purchaseCost)||0,closingQty:parseFloat(form.closingQty)||0,issues:{}};
     upd({parts:[...parts,p]});
     setForm({description:"",storeroom:"",shelf:"",location:"",unit:"each",openCost:"",openQty:"",purchaseQty:"",purchaseCost:"",purchaseFrom:"",closingQty:""});
     setShowForm(false);
+  };
+
+  const issuePart=()=>{
+    const qty = parseFloat(issueForm.qty)||0;
+    if (!issueForm.partId || !issueForm.vehicle || qty<=0) return;
+    const updatedParts = parts.map(p=>{
+      if (p.id !== issueForm.partId) return p;
+      const newIssues = {...(p.issues||{})};
+      newIssues[issueForm.vehicle] = (newIssues[issueForm.vehicle]||0) + qty;
+      return {...p, issues:newIssues, closingQty: Math.max(0,(p.closingQty||0)-qty)};
+    });
+    upd({parts:updatedParts});
+    setIssueForm({partId:"",vehicle:"",qty:""});
+    setShowIssue(false);
   };
 
   const totalValue=parts.reduce((s,p)=>{
@@ -889,7 +908,10 @@ function PartsStock({ loc, setLoc }) {
         <div className="strip-item"><div className="strip-label">Closing Stock Value</div><div className="strip-val">{fmtR(totalValue)}</div></div>
         <div className="strip-item"><div className="strip-label">Purchases This Month</div><div className="strip-val">{fmtR(totalPurchases)}</div></div>
         <div className="strip-item"><div className="strip-label">Line Items</div><div className="strip-val">{parts.length}</div></div>
-        <div style={{marginLeft:"auto"}}><button className="btn btn-primary" onClick={()=>setShowForm(true)}>+ Add Part</button></div>
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          <button className="btn btn-ghost" onClick={()=>setShowIssue(true)}>Issue Part</button>
+          <button className="btn btn-primary" onClick={()=>setShowForm(true)}>+ Add Part</button>
+        </div>
       </div>
       <div className="tbl-wrap"><table className="tbl">
         <thead><tr><th>Description</th><th>Location</th><th>Unit</th><th className="num">Open Qty</th><th className="num">Open Cost</th><th className="num">Purchased</th><th className="num">Purchase Cost</th><th>From</th><th className="num">Closing Qty</th><th className="num">Value</th><th></th></tr></thead>
@@ -908,7 +930,7 @@ function PartsStock({ loc, setLoc }) {
                 <td style={{fontSize:12,color:T.muted}}>{p.purchaseFrom}</td>
                 <td className="num">{p.closingQty}</td>
                 <td className="num">{fmtR((p.closingQty||0)*w)}</td>
-                <td><button className="btn btn-danger btn-sm" onClick={()=>upd({parts:parts.filter(x=>x.id!==p.id)})}>x</button></td>
+                <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({parts:parts.filter(x=>x.id!==p.id)})}>x</button>}</td>
               </tr>
             );
           })}
@@ -942,13 +964,34 @@ function PartsStock({ loc, setLoc }) {
           </div>
         </div>
       )}
+      {showIssue&&(
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowIssue(false)}>
+          <div className="modal" style={{maxWidth:440}}>
+            <div className="modal-title">Issue <span>Part to Vehicle</span></div>
+            <div className="field"><label>Part</label>
+              <select value={issueForm.partId} onChange={e=>setIssueForm(f=>({...f,partId:e.target.value}))}>
+                <option value="">‚Äî Select part ‚Äî</option>
+                {parts.map(p=><option key={p.id} value={p.id}>{p.description} ({p.closingQty} {p.unit} in stock)</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Vehicle / Equipment</label>
+              <select value={issueForm.vehicle} onChange={e=>setIssueForm(f=>({...f,vehicle:e.target.value}))}>
+                <option value="">‚Äî Select ‚Äî</option>
+                {(fleet||[]).map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Quantity</label><input type="number" min="0" value={issueForm.qty} onChange={e=>setIssueForm(f=>({...f,qty:e.target.value}))}/></div>
+            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={issuePart}>Issue Part</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
 
 // ‚îÄ‚îÄ‚îÄ REPAIRS ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
 const BLANK_REPAIR={date:"",vehicle:"",workshop:"",invoiceNo:"",description:"",labourCost:"",partsCost:"",otherCost:"",invoiceReceived:false,notes:""};
-function Repairs({ loc, setLoc, fleet }) {
+function Repairs({ loc, setLoc, fleet, isAdmin }) {
   const repairs=loc.repairs;
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
@@ -1008,7 +1051,7 @@ function Repairs({ loc, setLoc, fleet }) {
               <td className="num">{parseFloat(r.partsCost)>0?fmtR(r.partsCost):<span style={{color:T.muted}}>‚Äî</span>}</td>
               <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.totalCost||0)}</td>
               <td>{r.invoiceNo?<span className="badge badge-v">#{r.invoiceNo}</span>:r.invoiceReceived?<span className="badge badge-d">Received</span>:<span className="badge" style={{background:"rgba(192,80,80,.15)",color:T.danger,border:"1px solid rgba(192,80,80,.3)"}}>Pending</span>}</td>
-              <td onClick={e=>e.stopPropagation()}><button className="btn btn-danger btn-sm" onClick={()=>upd({repairs:repairs.filter(x=>x.id!==r.id)})}>x</button></td>
+              <td onClick={e=>e.stopPropagation()}>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({repairs:repairs.filter(x=>x.id!==r.id)})}>x</button>}</td>
             </tr>
           ))}
           {repairs.length===0&&<tr><td colSpan={9} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No repairs logged at this location</td></tr>}
@@ -1374,13 +1417,13 @@ function CostSummary({ locData, fleet }) {
 
 // ‚îÄ‚îÄ‚îÄ ROOT APP ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
 const PAGES = [
-  { id:"dashboard", label:"Dashboard",     section:"Overview"   },
-  { id:"diesel",    label:"Diesel",        section:"Fuel"       },
-  { id:"petrol",    label:"Petrol",        section:"Fuel"       },
-  { id:"parts",     label:"Parts & Stock", section:"Mechanical" },
-  { id:"repairs",   label:"Repairs",       section:"Mechanical" },
-  { id:"fleet",     label:"Fleet",         section:"Management" },
-  { id:"costs",     label:"Cost Summary",  section:"Reports"    },
+  { id:"dashboard", label:"Dashboard",     section:"Overview",   adminOnly:true  },
+  { id:"diesel",    label:"Diesel",        section:"Fuel",       adminOnly:false },
+  { id:"petrol",    label:"Petrol",        section:"Fuel",       adminOnly:false },
+  { id:"parts",     label:"Parts & Stock", section:"Mechanical", adminOnly:false },
+  { id:"repairs",   label:"Repairs",       section:"Mechanical", adminOnly:false },
+  { id:"fleet",     label:"Fleet",         section:"Management", adminOnly:true  },
+  { id:"costs",     label:"Cost Summary",  section:"Reports",    adminOnly:true  },
 ];
 
 const emptyLoc = () => ({
@@ -1442,13 +1485,110 @@ const sbFleet = {
   async remove(id){ await sb.deleteById("fleet",id); },
 };
 
+// ‚îÄ‚îÄ‚îÄ AUTH ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+const AUTH_STORAGE_KEY = "cl_ops_role";
+
+async function checkPassword(role, password) {
+  const rows = await sb.select("app_access", `role=eq.${role}`);
+  if (!rows || rows.length === 0) return false;
+  return rows[0].password === password;
+}
+
+function LoginScreen({ onLogin }) {
+  const [role, setRole]         = useState("staff");
+  const [password, setPassword] = useState("");
+  const [error, setError]       = useState("");
+  const [busy, setBusy]         = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(""); setBusy(true);
+    try {
+      const ok = await checkPassword(role, password);
+      if (ok) {
+        sessionStorage.setItem(AUTH_STORAGE_KEY, role);
+        onLogin(role);
+      } else {
+        setError("Incorrect password ‚Äî try again");
+      }
+    } catch (err) {
+      setError("Could not verify password ‚Äî check your connection");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <style>{css}</style>
+      <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,padding:24}}>
+        <img src={LOGO_DATA} alt="Crossing Lodges" style={{width:180,filter:"brightness(0) invert(1) opacity(.9)",marginBottom:8}}/>
+        <div style={{fontSize:10,letterSpacing:".2em",textTransform:"uppercase",color:T.gold,fontWeight:600,marginBottom:36,opacity:.8}}>Operations</div>
+
+        <form onSubmit={submit} style={{width:"100%",maxWidth:340,background:T.panel,border:`1px solid ${T.border}`,borderRadius:12,padding:28}}>
+          <div style={{fontSize:17,fontWeight:600,color:T.cream,fontFamily:"'Cormorant Garamond',serif",marginBottom:20,textAlign:"center"}}>Sign in</div>
+
+          <div className="field">
+            <label>Role</label>
+            <div style={{display:"flex",gap:8}}>
+              {[{id:"staff",label:"Staff"},{id:"admin",label:"Admin"}].map(r=>(
+                <button key={r.id} type="button" onClick={()=>setRole(r.id)}
+                  style={{
+                    flex:1,padding:"10px 12px",borderRadius:6,fontSize:13,fontWeight:600,cursor:"pointer",
+                    border:`1px solid ${role===r.id?T.gold:T.border}`,
+                    background:role===r.id?"rgba(184,147,90,.15)":"transparent",
+                    color:role===r.id?T.gold:T.muted,
+                  }}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Password</label>
+            <input type="password" value={password} autoFocus
+              onChange={e=>setPassword(e.target.value)}
+              placeholder="Enter password" />
+          </div>
+
+          {error && <div style={{color:T.danger,fontSize:12,marginBottom:14,textAlign:"center"}}>{error}</div>}
+
+          <button type="submit" className="btn btn-primary" disabled={busy}
+            style={{width:"100%",justifyContent:"center",padding:"11px",fontSize:14,opacity:busy?.6:1}}>
+            {busy ? "Checking..." : "Sign In"}
+          </button>
+        </form>
+
+        <div style={{marginTop:24,fontSize:11,color:T.muted,textAlign:"center",maxWidth:300,lineHeight:1.6}}>
+          Staff accounts can log fuel issues, dip readings, repairs and parts.<br/>
+          Admin accounts have full access.
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function App() {
+  const [role,    setRole]    = useState(() => sessionStorage.getItem(AUTH_STORAGE_KEY) || null);
   const [page,    setPage]    = useState("dashboard");
   const [locId,   setLocId]   = useState("ZC");
   const [fleet,   setFleet]   = useState([]);
   const [locData, setLocData] = useState({ ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() });
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState(null);
+
+  const isAdmin = role === "admin";
+
+  // Staff land on Diesel since Dashboard is admin-only
+  useEffect(() => {
+    if (role && !isAdmin && page === "dashboard") setPage("diesel");
+  }, [role, isAdmin, page]);
+
+  const logout = () => {
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    setRole(null);
+  };
 
   const loadAll = useCallback(async () => {
     setLoading(true); setLoadErr(null);
@@ -1504,7 +1644,8 @@ export default function App() {
     setFleet(prev => typeof updater==="function" ? updater(prev) : updater);
   }, []);
 
-  const sections  = [...new Set(PAGES.map(p=>p.section))];
+  const visiblePages = PAGES.filter(p => isAdmin || !p.adminOnly);
+  const sections  = [...new Set(visiblePages.map(p=>p.section))];
   const current   = PAGES.find(p=>p.id===page);
   const locColor  = LOC_COLORS[locId];
   const locName   = LOCATIONS.find(l=>l.id===locId)?.name;
@@ -1512,6 +1653,11 @@ export default function App() {
   const monthLabel = now.toLocaleString("en-ZA",{month:"long",year:"numeric"}).toUpperCase();
   const footerDate = now.toLocaleString("en-ZA",{month:"short",year:"numeric"});
   const loc        = locData[locId];
+
+  // Require login before showing anything else
+  if (!role) {
+    return <LoginScreen onLogin={setRole} />;
+  }
 
   if (loading) return (
     <>
@@ -1540,13 +1686,20 @@ export default function App() {
   );
 
   // Bottom nav pages (most used on mobile ‚Äî keep to 5 max)
-  const BOTTOM_NAV = [
-    { id:"diesel",    label:"Diesel"   },
-    { id:"petrol",    label:"Petrol"   },
-    { id:"repairs",   label:"Repairs"  },
-    { id:"fleet",     label:"Fleet"    },
-    { id:"costs",     label:"Costs"    },
-  ];
+  const BOTTOM_NAV = isAdmin
+    ? [
+        { id:"diesel",    label:"Diesel"   },
+        { id:"petrol",    label:"Petrol"   },
+        { id:"repairs",   label:"Repairs"  },
+        { id:"fleet",     label:"Fleet"    },
+        { id:"costs",     label:"Costs"    },
+      ]
+    : [
+        { id:"diesel",    label:"Diesel"   },
+        { id:"petrol",    label:"Petrol"   },
+        { id:"parts",     label:"Parts"    },
+        { id:"repairs",   label:"Repairs"  },
+      ];
 
   return (
     <>
@@ -1573,7 +1726,7 @@ export default function App() {
             {sections.map(sec=>(
               <div key={sec}>
                 <div className="nav-section">{sec}</div>
-                {PAGES.filter(p=>p.section===sec).map(p=>(
+                {visiblePages.filter(p=>p.section===sec).map(p=>(
                   <button key={p.id} className={`nav-item${page===p.id?" active":""}`} onClick={()=>setPage(p.id)}>
                     {p.label}
                   </button>
@@ -1583,10 +1736,20 @@ export default function App() {
           </nav>
 
           <div style={{padding:"13px 18px",borderTop:`1px solid ${T.border}`,fontSize:10,color:T.muted,lineHeight:1.6}}>
-            <div style={{color:T.gold,fontWeight:700,marginBottom:2}}>{footerDate}</div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{color:T.gold,fontWeight:700}}>{footerDate}</span>
+              <span style={{
+                fontSize:9,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",
+                padding:"2px 8px",borderRadius:3,
+                background: isAdmin ? "rgba(184,147,90,.18)" : "rgba(91,140,196,.18)",
+                color: isAdmin ? T.gold : T.fuel_d,
+                border: `1px solid ${isAdmin ? "rgba(184,147,90,.4)" : "rgba(91,140,196,.4)"}`,
+              }}>{isAdmin ? "Admin" : "Staff"}</span>
+            </div>
             Modimolle, Limpopo - ZA
-            <div style={{marginTop:6}}>
+            <div style={{marginTop:6,display:"flex",gap:10}}>
               <button onClick={loadAll} style={{background:"none",border:"none",color:T.muted,fontSize:10,cursor:"pointer",padding:0,letterSpacing:".05em"}}>R Refresh</button>
+              <button onClick={logout} style={{background:"none",border:"none",color:T.muted,fontSize:10,cursor:"pointer",padding:0,letterSpacing:".05em"}}>Sign out</button>
             </div>
           </div>
         </div>
@@ -1616,16 +1779,23 @@ export default function App() {
               </button>
             ))}
             <button onClick={loadAll} style={{marginLeft:"auto",background:"none",border:"none",color:T.muted,fontSize:11,cursor:"pointer",padding:"4px 8px",flexShrink:0}}>R</button>
+            <button onClick={logout} style={{background:"none",border:"none",color:T.muted,fontSize:11,cursor:"pointer",padding:"4px 8px",flexShrink:0}}>Sign out</button>
           </div>
 
           <div className="section">
-            {page==="dashboard" && <Dashboard locId={locId} loc={loc} fleet={fleet}/>}
-            {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet}/>}
+            {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet}/>}
+            {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
             {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet}/>}
-            {page==="parts"     && <PartsStock loc={loc} setLoc={setLoc}/>}
-            {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet}/>}
-            {page==="fleet"     && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet}/>}
-            {page==="costs"     && <CostSummary locData={locData} fleet={fleet}/>}
+            {page==="parts"     && <PartsStock loc={loc} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet}/>}
+            {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
+            {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet}/>}
+            {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet}/>}
+            {!isAdmin && (page==="dashboard"||page==="fleet"||page==="costs") && (
+              <div className="empty">
+                <div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>
+                This section is only available to Admin accounts
+              </div>
+            )}
           </div>
         </div>
 
