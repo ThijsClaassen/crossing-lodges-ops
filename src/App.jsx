@@ -171,6 +171,7 @@ const css = `
   .badge-d{background:rgba(91,140,196,.2);color:${T.fuel_d};border:1px solid rgba(91,140,196,.3)}
   .badge-p{background:rgba(192,96,96,.2);color:${T.fuel_p};border:1px solid rgba(192,96,96,.3)}
   .badge-v{background:rgba(90,155,114,.15);color:${T.ok};border:1px solid rgba(90,155,114,.3)}
+  .badge-neu{background:rgba(138,136,153,.15);color:${T.muted};border:1px solid rgba(138,136,153,.3)}
   .badge-e{background:rgba(184,147,90,.15);color:${T.gold};border:1px solid rgba(184,147,90,.3)}
   .badge-loc{font-size:10px;font-weight:600;padding:2px 8px;border-radius:3px}
 
@@ -376,7 +377,7 @@ function StockBanner({ cards }) {
 }
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
-function Dashboard({ locId, loc, fleet }) {
+function Dashboard({ locId, loc, fleet, locData }) {
   const dieselIssued  = loc.dieselIssues.reduce((s,e)=>s+(e.litres||0),0);
   const petrolIssued  = loc.petrolIssues.reduce((s,e)=>s+Math.abs(e.litres<0?e.litres:0),0);
   const totalRepairs  = loc.repairs.reduce((s,e)=>s+(e.totalCost||0),0);
@@ -388,6 +389,8 @@ function Dashboard({ locId, loc, fleet }) {
 
   return (
     <>
+      <FleetAlerts fleet={fleet} locData={locData||{}}/>
+
       <div className="kpi-row">
         <KPI label="Diesel Issued" value={fmtL(dieselIssued)} sub="From bulk tank this month" accent={T.fuel_d} pct={dieselIssued/500*100}/>
         <KPI label="Petrol Issued" value={fmtL(petrolIssued)} sub="From jerrycan stock" accent={T.fuel_p} pct={petrolIssued/100*100}/>
@@ -1170,13 +1173,375 @@ function Repairs({ loc, setLoc, fleet, isAdmin }) {
 }
 
 // ─── FLEET MANAGEMENT ────────────────────────────────────────────────────────
-function FleetManager({ fleet, setFleet, sbFleet }) {
+
+// ─── FLEET LICENCE & SERVICE HELPERS ─────────────────────────────────────────
+const LICENSE_WARN_DAYS = 14;   // notify 2 weeks before licence disk expires
+const SERVICE_WARN_DAYS = 14;   // notify 2 weeks before service due date
+const SERVICE_WARN_KM   = 500;  // notify within 500 km of service due
+
+const parseDMY = (s) => {
+  if (!s) return null;
+  const p = s.split("/");
+  if (p.length !== 3) return null;
+  const d = new Date(+p[2], +p[1]-1, +p[0]);
+  return isNaN(d.getTime()) ? null : d;
+};
+const fmtDMY = (dt) =>
+  `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}`;
+const addMonths = (dt, n) => { const d = new Date(dt.getTime()); d.setMonth(d.getMonth()+n); return d; };
+const daysUntil = (dmy) => {
+  const d = parseDMY(dmy);
+  if (!d) return null;
+  const t = new Date(); t.setHours(0,0,0,0);
+  return Math.round((d - t) / 86400000);
+};
+
+// Highest odometer reading seen for each vehicle, across every location
+function latestOdometers(locData) {
+  const m = {};
+  Object.values(locData).forEach(loc => {
+    if (!loc) return;
+    [...(loc.dieselIssues||[]), ...(loc.petrolIssues||[])].forEach(e => {
+      const km = parseFloat(e.mileage);
+      if (e.vehicle && !isNaN(km) && km > 0) {
+        m[e.vehicle] = Math.max(m[e.vehicle] || 0, km);
+      }
+    });
+  });
+  return m;
+}
+
+// Works out licence + service standing for one vehicle
+function vehicleStatus(v, latestKm) {
+  const out = { license:null, service:null };
+
+  if (v.license_expiry) {
+    const days = daysUntil(v.license_expiry);
+    out.license = {
+      date: v.license_expiry,
+      days,
+      state: days < 0 ? "overdue" : days <= LICENSE_WARN_DAYS ? "soon" : "ok",
+    };
+  }
+
+  const hasDate = v.last_service_date && v.service_interval_months > 0;
+  const hasKm   = v.last_service_km != null && v.service_interval_km > 0;
+
+  if (hasDate || hasKm) {
+    const s = { dueDate:null, daysLeft:null, dueKm:null, kmLeft:null, state:"ok",
+                lastDate:v.last_service_date||null, lastKm:v.last_service_km ?? null };
+
+    if (hasDate) {
+      const last = parseDMY(v.last_service_date);
+      if (last) {
+        s.dueDate  = fmtDMY(addMonths(last, +v.service_interval_months));
+        s.daysLeft = daysUntil(s.dueDate);
+      }
+    }
+    if (hasKm) {
+      s.dueKm = (+v.last_service_km) + (+v.service_interval_km);
+      if (latestKm != null) s.kmLeft = s.dueKm - latestKm;
+    }
+
+    // Whichever trigger comes first wins
+    const states = [];
+    if (s.daysLeft != null) states.push(s.daysLeft < 0 ? "overdue" : s.daysLeft <= SERVICE_WARN_DAYS ? "soon" : "ok");
+    if (s.kmLeft   != null) states.push(s.kmLeft   < 0 ? "overdue" : s.kmLeft   <= SERVICE_WARN_KM   ? "soon" : "ok");
+    s.state = states.includes("overdue") ? "overdue" : states.includes("soon") ? "soon" : "ok";
+    out.service = s;
+  }
+
+  return out;
+}
+
+// Every vehicle needing attention, worst first
+function buildFleetAlerts(fleet, locData) {
+  const odo = latestOdometers(locData);
+  const rows = [];
+  fleet.forEach(v => {
+    const st = vehicleStatus(v, odo[v.id]);
+    if (st.license && st.license.state !== "ok") {
+      rows.push({ vehicle:v, kind:"Licence disk", state:st.license.state,
+        detail: st.license.state === "overdue"
+          ? `Expired ${Math.abs(st.license.days)} day${Math.abs(st.license.days)===1?"":"s"} ago (${st.license.date})`
+          : `Expires in ${st.license.days} day${st.license.days===1?"":"s"} (${st.license.date})` });
+    }
+    if (st.service && st.service.state !== "ok") {
+      const bits = [];
+      if (st.service.daysLeft != null) {
+        bits.push(st.service.daysLeft < 0
+          ? `${Math.abs(st.service.daysLeft)} day${Math.abs(st.service.daysLeft)===1?"":"s"} overdue`
+          : `due in ${st.service.daysLeft} day${st.service.daysLeft===1?"":"s"}`);
+      }
+      if (st.service.kmLeft != null) {
+        bits.push(st.service.kmLeft < 0
+          ? `${Math.abs(st.service.kmLeft).toLocaleString()} km past due`
+          : `${st.service.kmLeft.toLocaleString()} km to go`);
+      }
+      rows.push({ vehicle:v, kind:"Service", state:st.service.state, detail: bits.join(" · ") });
+    }
+  });
+  return rows.sort((a,b) => (a.state==="overdue"?0:1) - (b.state==="overdue"?0:1));
+}
+
+// ─── FLEET ALERTS BANNER ─────────────────────────────────────────────────────
+function FleetAlerts({ fleet, locData, onOpenVehicle }) {
+  const alerts = useMemo(() => buildFleetAlerts(fleet, locData), [fleet, locData]);
+  if (alerts.length === 0) return null;
+
+  const overdue = alerts.filter(a => a.state === "overdue").length;
+
+  return (
+    <div style={{
+      background: overdue ? "rgba(192,88,88,.08)" : "rgba(200,151,58,.08)",
+      border: `1px solid ${overdue ? "rgba(192,88,88,.3)" : "rgba(200,151,58,.3)"}`,
+      borderRadius: 8, padding: "13px 16px", marginBottom: 18,
+    }}>
+      <div style={{fontSize:10,letterSpacing:".12em",textTransform:"uppercase",fontWeight:700,
+        color: overdue ? T.danger : T.warn, marginBottom:9}}>
+        Fleet Attention Needed ({alerts.length})
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {alerts.map((a,i) => (
+          <button key={i}
+            onClick={() => onOpenVehicle && onOpenVehicle(a.vehicle)}
+            style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap",background:"none",
+              border:"none",padding:0,textAlign:"left",cursor:onOpenVehicle?"pointer":"default",
+              fontFamily:"'Inter',sans-serif",width:"100%"}}>
+            <span className="badge" style={{
+              background: a.state==="overdue" ? "rgba(192,88,88,.2)" : "rgba(200,151,58,.2)",
+              color:      a.state==="overdue" ? T.danger : T.warn,
+              border:`1px solid ${a.state==="overdue" ? "rgba(192,88,88,.4)" : "rgba(200,151,58,.4)"}`,
+              flexShrink:0,
+            }}>{a.kind}</span>
+            <span style={{fontSize:13,fontWeight:600,color:T.cream}}>{a.vehicle.name}</span>
+            <span style={{fontSize:12,color:T.muted}}>{a.detail}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── VEHICLE DETAIL ──────────────────────────────────────────────────────────
+function VehicleDetail({ vehicle, locData, onClose }) {
+  const [tab, setTab] = useState("repairs");
+  const DIESEL_PRICE = 20.5;
+  const PETROL_PRICE = 21.5;
+
+  const data = useMemo(() => {
+    const repairs = [];
+    const parts   = [];
+    const fuel    = [];
+
+    LOCATIONS.forEach(l => {
+      const loc = locData[l.id];
+      if (!loc) return;
+
+      (loc.repairs||[]).forEach(r => {
+        if (r.vehicle === vehicle.id) repairs.push({ ...r, locId:l.id, locName:l.name });
+      });
+
+      (loc.parts||[]).forEach(p => {
+        const qty = (p.issues||{})[vehicle.id];
+        if (qty) parts.push({
+          id: `${l.id}-${p.id}`, description: p.description, unit: p.unit,
+          qty, unitCost: p.openCost||0, value: qty * (p.openCost||0),
+          locId: l.id, locName: l.name,
+        });
+      });
+
+      (loc.dieselIssues||[]).forEach(e => {
+        if (e.vehicle === vehicle.id) fuel.push({
+          id:`d-${e.id}`, date:e.date, litres:e.litres||0, type:"Diesel",
+          cost:(e.litres||0)*DIESEL_PRICE, mileage:e.mileage, locName:l.name,
+        });
+      });
+      (loc.petrolIssues||[]).forEach(e => {
+        if (e.vehicle === vehicle.id) {
+          const lit = Math.abs(e.litres < 0 ? e.litres : 0);
+          if (lit > 0) fuel.push({
+            id:`p-${e.id}`, date:e.date, litres:lit, type:"Petrol",
+            cost:lit*PETROL_PRICE, mileage:e.mileage, locName:l.name,
+          });
+        }
+      });
+    });
+
+    const byDateDesc = (a,b) => {
+      const da = parseDMY(a.date), db = parseDMY(b.date);
+      return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+    };
+    repairs.sort(byDateDesc);
+    fuel.sort(byDateDesc);
+
+    const repairTotal = repairs.reduce((s,r)=>s+(r.totalCost||0),0);
+    const partsTotal  = parts.reduce((s,p)=>s+p.value,0);
+    const fuelTotal   = fuel.reduce((s,f)=>s+f.cost,0);
+    const litresTotal = fuel.reduce((s,f)=>s+f.litres,0);
+
+    return { repairs, parts, fuel, repairTotal, partsTotal, fuelTotal, litresTotal };
+  }, [vehicle, locData]);
+
+  const odo = latestOdometers(locData)[vehicle.id];
+  const st  = vehicleStatus(vehicle, odo);
+  const stColor = s => s==="overdue" ? T.danger : s==="soon" ? T.warn : T.ok;
+  const grandTotal = data.repairTotal + data.partsTotal + data.fuelTotal;
+
+  const TABS = [
+    { id:"repairs", label:`Repairs (${data.repairs.length})` },
+    { id:"parts",   label:`Parts (${data.parts.length})` },
+    { id:"fuel",    label:`Fuel (${data.fuel.length})` },
+  ];
+
+  return (
+    <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:760}}>
+        <div className="modal-title">{vehicle.name}</div>
+        <div style={{display:"flex",gap:7,marginBottom:16,flexWrap:"wrap"}}>
+          <span className="mono" style={{fontSize:11,color:T.muted}}>{vehicle.id}</span>
+          <span className={`badge badge-${vehicle.fuel==="diesel"?"d":"p"}`}>{vehicle.fuel}</span>
+          <span className={`badge badge-${vehicle.category==="vehicle"?"v":"e"}`}>{vehicle.category}</span>
+          {odo != null && <span className="badge badge-neu">{odo.toLocaleString()} km</span>}
+        </div>
+
+        {/* Licence + service standing */}
+        <div className="grid2" style={{marginBottom:16}}>
+          <div style={{background:"rgba(0,0,0,.22)",border:`1px solid ${T.border}`,borderRadius:7,padding:"11px 13px"}}>
+            <div style={{fontSize:9,letterSpacing:".12em",textTransform:"uppercase",color:T.muted,fontWeight:700,marginBottom:6}}>Licence Disk</div>
+            {st.license ? (<>
+              <div style={{fontFamily:"'Space Mono'",fontSize:15,fontWeight:700,color:stColor(st.license.state)}}>
+                {st.license.date}
+              </div>
+              <div style={{fontSize:11,color:T.muted,marginTop:3}}>
+                {st.license.days < 0
+                  ? `Expired ${Math.abs(st.license.days)} days ago`
+                  : `${st.license.days} days remaining`}
+              </div>
+            </>) : <div style={{fontSize:12,color:T.border}}>Not set</div>}
+          </div>
+
+          <div style={{background:"rgba(0,0,0,.22)",border:`1px solid ${T.border}`,borderRadius:7,padding:"11px 13px"}}>
+            <div style={{fontSize:9,letterSpacing:".12em",textTransform:"uppercase",color:T.muted,fontWeight:700,marginBottom:6}}>Service</div>
+            {st.service ? (<>
+              <div style={{fontFamily:"'Space Mono'",fontSize:15,fontWeight:700,color:stColor(st.service.state)}}>
+                {st.service.dueDate || (st.service.dueKm != null ? `${st.service.dueKm.toLocaleString()} km` : "—")}
+              </div>
+              <div style={{fontSize:11,color:T.muted,marginTop:3,lineHeight:1.5}}>
+                {st.service.lastDate && <>Last: {st.service.lastDate}<br/></>}
+                {st.service.daysLeft != null && (st.service.daysLeft < 0
+                  ? `${Math.abs(st.service.daysLeft)} days overdue`
+                  : `Due in ${st.service.daysLeft} days`)}
+                {st.service.kmLeft != null && <><br/>{st.service.kmLeft < 0
+                  ? `${Math.abs(st.service.kmLeft).toLocaleString()} km past due`
+                  : `${st.service.kmLeft.toLocaleString()} km to go`}</>}
+              </div>
+            </>) : <div style={{fontSize:12,color:T.border}}>Not set</div>}
+          </div>
+        </div>
+
+        {/* Lifetime cost strip */}
+        <div className="strip" style={{marginBottom:16}}>
+          <div className="strip-item"><div className="strip-label">Fuel</div><div className="strip-val">{fmtR(data.fuelTotal)}</div></div>
+          <div className="strip-item"><div className="strip-label">Parts</div><div className="strip-val">{fmtR(data.partsTotal)}</div></div>
+          <div className="strip-item"><div className="strip-label">Repairs</div><div className="strip-val">{fmtR(data.repairTotal)}</div></div>
+          <div className="strip-item"><div className="strip-label">Total</div>
+            <div className="strip-val" style={{color:T.goldLt}}>{fmtR(grandTotal)}</div></div>
+        </div>
+
+        <div className="tabs">
+          {TABS.map(t=>(
+            <button key={t.id} className={`tab${tab===t.id?" active":""}`} onClick={()=>setTab(t.id)}>{t.label}</button>
+          ))}
+        </div>
+
+        {/* REPAIRS */}
+        {tab==="repairs" && (
+          <div className="tbl-wrap"><table className="tbl" style={{minWidth:0}}>
+            <thead><tr><th>Date</th><th>Workshop</th><th>Description</th><th>Where</th>
+              <th className="num">Labour</th><th className="num">Parts</th><th className="num">Total</th></tr></thead>
+            <tbody>
+              {data.repairs.map(r=>(
+                <tr key={r.id}>
+                  <td className="mono" style={{fontSize:11}}>{r.date}</td>
+                  <td style={{fontWeight:600}}>{r.workshop||"—"}</td>
+                  <td style={{fontSize:12,color:T.muted,maxWidth:220}}>{r.description||"—"}</td>
+                  <td><span className="badge badge-neu">{r.locId}</span></td>
+                  <td className="num" style={{color:T.muted}}>{fmtR(r.labourCost)}</td>
+                  <td className="num" style={{color:T.muted}}>{fmtR(r.partsCost)}</td>
+                  <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.totalCost)}</td>
+                </tr>
+              ))}
+              {data.repairs.length===0&&<tr><td colSpan={7} className="empty">No repairs recorded for this vehicle</td></tr>}
+            </tbody>
+          </table></div>
+        )}
+
+        {/* PARTS */}
+        {tab==="parts" && (
+          <div className="tbl-wrap"><table className="tbl" style={{minWidth:0}}>
+            <thead><tr><th>Part</th><th>Where</th><th className="num">Qty</th>
+              <th className="num">Unit Cost</th><th className="num">Value</th></tr></thead>
+            <tbody>
+              {data.parts.map(p=>(
+                <tr key={p.id}>
+                  <td style={{fontWeight:600}}>{p.description}</td>
+                  <td><span className="badge badge-neu">{p.locId}</span></td>
+                  <td className="num">{p.qty} <span style={{fontSize:10,color:T.muted}}>{p.unit}</span></td>
+                  <td className="num" style={{color:T.muted}}>{fmtR(p.unitCost)}</td>
+                  <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(p.value)}</td>
+                </tr>
+              ))}
+              {data.parts.length===0&&<tr><td colSpan={5} className="empty">No parts allocated to this vehicle</td></tr>}
+            </tbody>
+          </table></div>
+        )}
+
+        {/* FUEL */}
+        {tab==="fuel" && (
+          <div className="tbl-wrap"><table className="tbl" style={{minWidth:0}}>
+            <thead><tr><th>Date</th><th>Type</th><th>Where</th><th className="num">Litres</th>
+              <th className="num">Odometer</th><th className="num">Cost</th></tr></thead>
+            <tbody>
+              {data.fuel.map(f=>(
+                <tr key={f.id}>
+                  <td className="mono" style={{fontSize:11}}>{f.date}</td>
+                  <td><span className={`badge badge-${f.type==="Diesel"?"d":"p"}`}>{f.type}</span></td>
+                  <td style={{fontSize:11,color:T.muted}}>{f.locName}</td>
+                  <td className="num">{f.litres.toFixed(1)} L</td>
+                  <td className="num" style={{color:T.muted}}>{f.mileage?Number(f.mileage).toLocaleString():"—"}</td>
+                  <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(f.cost)}</td>
+                </tr>
+              ))}
+              {data.fuel.length===0&&<tr><td colSpan={6} className="empty">No fuel issued to this vehicle</td></tr>}
+            </tbody>
+          </table></div>
+        )}
+
+        <div style={{display:"flex",gap:9,marginTop:16}}>
+          <button className="btn btn-ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FleetManager({ fleet, setFleet, sbFleet, locData }) {
   const [showForm, setShowForm] = useState(false);
   const [editEntry, setEditEntry] = useState(null);
-  const [form, setForm] = useState({ name:"", id:"", category:"vehicle", fuel:"diesel" });
+  const [detailVehicle, setDetailVehicle] = useState(null);
+  const BLANK_V = { name:"", id:"", category:"vehicle", fuel:"diesel",
+    license_expiry:"", last_service_date:"", last_service_km:"",
+    service_interval_months:"", service_interval_km:"" };
+  const [form, setForm] = useState(BLANK_V);
 
-  const openAdd  = () => { setForm({name:"",id:"",category:"vehicle",fuel:"diesel"}); setEditEntry(null); setShowForm(true); };
-  const openEdit = (v) => { setForm({...v}); setEditEntry(v.id); setShowForm(true); };
+  const odo = useMemo(()=>latestOdometers(locData||{}), [locData]);
+
+  const openAdd  = () => { setForm(BLANK_V); setEditEntry(null); setShowForm(true); };
+  const openEdit = (v) => {
+    setForm({...BLANK_V, ...Object.fromEntries(Object.entries(v).map(([k,x])=>[k, x==null?"":x]))});
+    setEditEntry(v.id); setShowForm(true);
+  };
 
   const save = async () => {
     if (!form.name.trim() || !form.id.trim()) return;
@@ -1206,6 +1571,8 @@ function FleetManager({ fleet, setFleet, sbFleet }) {
 
   return (
     <>
+      <FleetAlerts fleet={fleet} locData={locData||{}} onOpenVehicle={setDetailVehicle}/>
+
       <div className="strip">
         <div className="strip-item"><div className="strip-label">Vehicles</div><div className="strip-val">{vehicles.length}</div></div>
         <div className="strip-item"><div className="strip-label">Equipment</div><div className="strip-val">{equipment.length}</div></div>
@@ -1216,25 +1583,51 @@ function FleetManager({ fleet, setFleet, sbFleet }) {
         <div key={group.label} style={{marginBottom:28}}>
           <div className="section-title">{group.label}</div>
           <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>Name</th><th>ID / Reg</th><th>Fuel</th><th>Type</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>ID / Reg</th><th>Fuel</th><th>Licence Disk</th><th>Service Due</th><th></th></tr></thead>
             <tbody>
-              {group.items.map(v => (
+              {group.items.map(v => {
+                const st = vehicleStatus(v, odo[v.id]);
+                const col = s => s==="overdue"?T.danger:s==="soon"?T.warn:T.ok;
+                return (
                 <tr key={v.id}>
-                  <td style={{fontWeight:600}}>{v.name}</td>
+                  <td style={{fontWeight:600}}>
+                    <button onClick={()=>setDetailVehicle(v)}
+                      style={{background:"none",border:"none",padding:0,color:T.cream,fontWeight:600,
+                        fontFamily:"'Inter',sans-serif",fontSize:13,cursor:"pointer",textAlign:"left"}}>
+                      {v.name}
+                    </button>
+                  </td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{v.id}</td>
                   <td><span className={`badge badge-${v.fuel==="diesel"?"d":"p"}`}>{v.fuel}</span></td>
-                  <td><span className={`badge badge-${v.category==="vehicle"?"v":"e"}`}>{v.category}</span></td>
+                  <td>
+                    {st.license
+                      ? <span style={{fontFamily:"'Space Mono'",fontSize:12,color:col(st.license.state)}}>
+                          {st.license.date}
+                        </span>
+                      : <span style={{color:T.border,fontSize:11}}>—</span>}
+                  </td>
+                  <td>
+                    {st.service
+                      ? <span style={{fontFamily:"'Space Mono'",fontSize:12,color:col(st.service.state)}}>
+                          {st.service.dueDate || (st.service.dueKm!=null?`${st.service.dueKm.toLocaleString()} km`:"—")}
+                        </span>
+                      : <span style={{color:T.border,fontSize:11}}>—</span>}
+                  </td>
                   <td style={{display:"flex",gap:6}}>
                     <button className="btn btn-ghost btn-sm" onClick={()=>openEdit(v)}>Edit</button>
                     <button className="btn btn-danger btn-sm" onClick={()=>remove(v)}>Remove</button>
                   </td>
                 </tr>
-              ))}
-              {group.items.length===0&&<tr><td colSpan={5} className="empty">No {group.label.toLowerCase()} yet</td></tr>}
+              );})}
+              {group.items.length===0&&<tr><td colSpan={6} className="empty">No {group.label.toLowerCase()} yet</td></tr>}
             </tbody>
           </table></div>
         </div>
       ))}
+
+      {detailVehicle && (
+        <VehicleDetail vehicle={detailVehicle} locData={locData||{}} onClose={()=>setDetailVehicle(null)}/>
+      )}
 
       {showForm && (
         <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
@@ -1261,6 +1654,38 @@ function FleetManager({ fleet, setFleet, sbFleet }) {
                 </select>
               </div>
             </div>
+
+            <div className="section-title" style={{marginTop:6}}>Licence Disk</div>
+            <div className="field"><label>Expiry Date</label>
+              <DateField value={form.license_expiry} onChange={v=>setForm(f=>({...f,license_expiry:v}))}/>
+              <div style={{fontSize:11,color:T.muted,marginTop:4}}>
+                You will be alerted {LICENSE_WARN_DAYS} days before this date.
+              </div>
+            </div>
+
+            <div className="section-title" style={{marginTop:12}}>Service Schedule</div>
+            <div style={{fontSize:11,color:T.muted,marginBottom:10,lineHeight:1.55}}>
+              Fill in either the date fields, the kilometre fields, or both.
+              With both, whichever falls due first triggers the alert. Leave blank to skip service tracking.
+            </div>
+            <div className="grid2">
+              <div className="field"><label>Last Service Date</label>
+                <DateField value={form.last_service_date} onChange={v=>setForm(f=>({...f,last_service_date:v}))}/>
+              </div>
+              <div className="field"><label>Interval (months)</label>
+                <input type="number" min="0" placeholder="e.g. 12" value={form.service_interval_months}
+                  onChange={e=>setForm(f=>({...f,service_interval_months:e.target.value}))}/>
+              </div>
+              <div className="field"><label>Odometer at Last Service (km)</label>
+                <input type="number" min="0" placeholder="e.g. 82000" value={form.last_service_km}
+                  onChange={e=>setForm(f=>({...f,last_service_km:e.target.value}))}/>
+              </div>
+              <div className="field"><label>Interval (km)</label>
+                <input type="number" min="0" placeholder="e.g. 10000" value={form.service_interval_km}
+                  onChange={e=>setForm(f=>({...f,service_interval_km:e.target.value}))}/>
+              </div>
+            </div>
+
             <div style={{display:"flex",gap:9}}>
               <button className="btn btn-primary" onClick={save}>{editEntry?"Save Changes":"Add to Fleet"}</button>
               <button className="btn btn-ghost" onClick={()=>setShowForm(false)}>Cancel</button>
@@ -1275,6 +1700,7 @@ function FleetManager({ fleet, setFleet, sbFleet }) {
 // ─── COST SUMMARY ────────────────────────────────────────────────────────────
 function CostSummary({ locData, fleet }) {
   const [viewLoc, setViewLoc] = useState("all");
+  const [detailVehicle, setDetailVehicle] = useState(null);
   const DIESEL_PRICE = 20.5;
   const PETROL_PRICE = 21.5;
 
@@ -1338,6 +1764,8 @@ function CostSummary({ locData, fleet }) {
 
   return (
     <>
+      <FleetAlerts fleet={fleet} locData={locData} onOpenVehicle={setDetailVehicle}/>
+
       {/* Location filter */}
       <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
         {[{id:"all",name:"All Locations"},...LOCATIONS].map(l=>(
@@ -1400,7 +1828,17 @@ function CostSummary({ locData, fleet }) {
         <tbody>
           {ytd.map(r => (
             <tr key={r.id}>
-              <td style={{fontWeight:600}}>{r.name}</td>
+              <td style={{fontWeight:600}}>
+                <button onClick={()=>{
+                    const v = fleet.find(x=>x.id===r.id);
+                    if (v) setDetailVehicle(v);
+                  }}
+                  style={{background:"none",border:"none",padding:0,textAlign:"left",cursor:"pointer",
+                    fontFamily:"'Inter',sans-serif",fontSize:13,fontWeight:600,color:T.cream,
+                    borderBottom:`1px dotted ${T.border}`}}>
+                  {r.name}
+                </button>
+              </td>
               <td><span className={`badge badge-${r.fuel_type==="diesel"?"d":"p"}`}>{r.fuel_type}</span></td>
               <td className="num">{fmtR(r.fuel)}</td>
               <td className="num">{fmtR(r.parts)}</td>
@@ -1434,6 +1872,16 @@ function CostSummary({ locData, fleet }) {
           {ytd.length===0 && <tr><td colSpan={9} className="empty">No cost data yet</td></tr>}
         </tbody>
       </table></div>
+
+      {ytd.length > 0 && (
+        <div style={{fontSize:11,color:T.muted,marginTop:10}}>
+          Tap a vehicle name to see its full repair, parts and fuel history.
+        </div>
+      )}
+
+      {detailVehicle && (
+        <VehicleDetail vehicle={detailVehicle} locData={locData} onClose={()=>setDetailVehicle(null)}/>
+      )}
 
       {/* Cost/km legend */}
       {withCpkm.length > 0 && (
@@ -1519,9 +1967,18 @@ async function syncLocChanges(locId, oldLoc, newLoc) {
     await sb.delete("repairs",r.id);
 }
 
+const fleetRow = v => ({
+  id:v.id, name:v.name, category:v.category, fuel:v.fuel,
+  license_expiry:          v.license_expiry || null,
+  last_service_date:       v.last_service_date || null,
+  last_service_km:         v.last_service_km === "" || v.last_service_km == null ? null : Number(v.last_service_km),
+  service_interval_months: v.service_interval_months === "" || v.service_interval_months == null ? null : Number(v.service_interval_months),
+  service_interval_km:     v.service_interval_km === "" || v.service_interval_km == null ? null : Number(v.service_interval_km),
+});
+
 const sbFleet = {
-  async add(v)    { await sb.insert("fleet",{id:v.id,name:v.name,category:v.category,fuel:v.fuel}); },
-  async upd(v)    { await sb.deleteById("fleet",v.id); await sb.insert("fleet",{id:v.id,name:v.name,category:v.category,fuel:v.fuel}); },
+  async add(v)    { await sb.insert("fleet", fleetRow(v)); },
+  async upd(v)    { await sb.deleteById("fleet",v.id); await sb.insert("fleet", fleetRow(v)); },
   async remove(id){ await sb.deleteById("fleet",id); },
 };
 
@@ -1868,12 +2325,12 @@ export default function App() {
           </div>
 
           <div className="section">
-            {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet}/>}
+            {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData}/>}
             {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
             {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet}/>}
             {page==="parts"     && <PartsStock loc={loc} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet}/>}
             {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
-            {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet}/>}
+            {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData}/>}
             {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet}/>}
             {!isAdmin && (page==="dashboard"||page==="fleet"||page==="costs") && (
               <div className="empty">
