@@ -39,6 +39,12 @@ const sb = {
     });
     if (!res.ok) throw new Error(await res.text());
   },
+  async patch(table, id, row) {
+    const res = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+      method:"PATCH", headers:sb.headers, body:JSON.stringify(row),
+    });
+    if (!res.ok) throw new Error(await res.text());
+  },
   async deleteById(table, id) {
     const res = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
       method:"DELETE", headers:sb.headers,
@@ -1978,7 +1984,7 @@ const fleetRow = v => ({
 
 const sbFleet = {
   async add(v)    { await sb.insert("fleet", fleetRow(v)); },
-  async upd(v)    { await sb.deleteById("fleet",v.id); await sb.insert("fleet", fleetRow(v)); },
+  async upd(v)    { const {id, ...rest} = fleetRow(v); await sb.patch("fleet", v.id, rest); },
   async remove(id){ await sb.deleteById("fleet",id); },
 };
 
@@ -2105,7 +2111,14 @@ export default function App() {
         sb.select("repairs"),
       ]);
 
-      setFleet(fleetRows.map(r=>({id:r.id,name:r.name,category:r.category,fuel:r.fuel})));
+      setFleet(fleetRows.map(r=>({
+        id:r.id, name:r.name, category:r.category, fuel:r.fuel,
+        license_expiry:          r.license_expiry || "",
+        last_service_date:       r.last_service_date || "",
+        last_service_km:         r.last_service_km == null ? null : +r.last_service_km,
+        service_interval_months: r.service_interval_months == null ? null : +r.service_interval_months,
+        service_interval_km:     r.service_interval_km == null ? null : +r.service_interval_km,
+      })));
 
       const nd = { ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() };
       LOCATIONS.forEach(l => {
