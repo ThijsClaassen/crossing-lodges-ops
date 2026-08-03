@@ -1705,18 +1705,23 @@ function FleetManager({ fleet, setFleet, sbFleet, locData }) {
 
 // ─── COST SUMMARY ────────────────────────────────────────────────────────────
 function CostSummary({ locData, fleet }) {
-  const [viewLoc, setViewLoc] = useState("all");
+  const [viewLoc, setViewLoc]         = useState("all");
   const [detailVehicle, setDetailVehicle] = useState(null);
+  const [costTab, setCostTab]         = useState("lifetime"); // "lifetime" | "monthly"
+  const [monthCursor, setMonthCursor] = useState(() => { const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()}; });
   const DIESEL_PRICE = 20.5;
   const PETROL_PRICE = 21.5;
 
   const locsToShow = viewLoc === "all" ? LOCATIONS.map(l=>l.id) : [viewLoc];
 
-  const ytd = useMemo(() => {
+  // Shared per-vehicle cost aggregation, used by both tabs.
+  // inMonth: null = no filter (lifetime), or a (dateStr) => boolean predicate.
+  // Parts costs have no per-transaction date in the data model (see note below),
+  // so they can only ever be included when inMonth is null.
+  const computeCosts = (inMonth) => {
     const m = {};
     fleet.forEach(v => {
-      m[v.id] = { fuel:0, parts:0, repairs:0, name:v.name, fuel_type:v.fuel, category:v.category,
-                  odomReadings:[] }; // collect all numeric odometer readings across locs
+      m[v.id] = { fuel:0, parts:0, repairs:0, name:v.name, fuel_type:v.fuel, category:v.category, odomReadings:[] };
     });
 
     locsToShow.forEach(lid => {
@@ -1724,6 +1729,7 @@ function CostSummary({ locData, fleet }) {
       if (!loc) return;
 
       loc.dieselIssues.forEach(e => {
+        if (inMonth && !inMonth(e.date)) return;
         if (e.vehicle && m[e.vehicle]) {
           m[e.vehicle].fuel += (e.litres||0) * DIESEL_PRICE;
           const km = parseFloat(e.mileage);
@@ -1731,6 +1737,7 @@ function CostSummary({ locData, fleet }) {
         }
       });
       loc.petrolIssues.forEach(e => {
+        if (inMonth && !inMonth(e.date)) return;
         if (e.vehicle && m[e.vehicle]) {
           m[e.vehicle].fuel += Math.abs(e.litres < 0 ? e.litres : 0) * PETROL_PRICE;
           const km = parseFloat(e.mileage);
@@ -1738,41 +1745,88 @@ function CostSummary({ locData, fleet }) {
         }
       });
       loc.repairs.forEach(e => {
+        if (inMonth && !inMonth(e.date)) return;
         if (m[e.vehicle]) m[e.vehicle].repairs += e.totalCost||0;
       });
-      loc.parts.forEach(p => {
-        Object.entries(p.issues||{}).forEach(([vid,qty]) => {
-          if (m[vid]) m[vid].parts += qty * p.openCost;
+      // Parts issues carry no date per transaction — only a running total per
+      // vehicle. They can only be attributed to "lifetime", never to a month.
+      if (!inMonth) {
+        loc.parts.forEach(p => {
+          Object.entries(p.issues||{}).forEach(([vid,qty]) => {
+            if (m[vid]) m[vid].parts += qty * p.openCost;
+          });
         });
-      });
+      }
     });
 
     return Object.entries(m).map(([id, d]) => {
       const total = d.fuel + d.parts + d.repairs;
-      // km driven = highest odometer - lowest odometer seen this month
       const readings = d.odomReadings;
-      const kmDriven = readings.length >= 2
-        ? Math.max(...readings) - Math.min(...readings)
-        : null;
+      const kmDriven = readings.length >= 2 ? Math.max(...readings) - Math.min(...readings) : null;
       const costPerKm = kmDriven && kmDriven > 0 ? total / kmDriven : null;
       return { id, ...d, total, kmDriven, costPerKm };
     })
     .filter(r => r.total > 0)
     .sort((a, b) => b.total - a.total);
-  }, [locData, fleet, viewLoc]);
+  };
 
-  const grand        = ytd.reduce((s,r) => s + r.total, 0);
-  const totalKm      = ytd.filter(r=>r.kmDriven).reduce((s,r)=>s+(r.kmDriven||0),0);
-  const withCpkm     = ytd.filter(r => r.costPerKm !== null);
-  const fleetAvgCpkm = withCpkm.length > 0
+  // ── LIFETIME ──
+  const lifetime = useMemo(() => computeCosts(null), [locData, fleet, viewLoc]);
+  const grand        = lifetime.reduce((s,r) => s + r.total, 0);
+  const totalKm       = lifetime.filter(r=>r.kmDriven).reduce((s,r)=>s+(r.kmDriven||0),0);
+  const withCpkm      = lifetime.filter(r => r.costPerKm !== null);
+  const fleetAvgCpkm  = withCpkm.length > 0
     ? withCpkm.reduce((s,r)=>s+r.total,0) / withCpkm.reduce((s,r)=>s+(r.kmDriven||0),0)
     : null;
+
+  // ── MONTHLY ──
+  const monthLabel = (y,m) => new Date(y,m,1).toLocaleString("en-ZA",{month:"long",year:"numeric"});
+  const inMonthFilter = (y,m) => (dateStr) => {
+    const d = parseDMY(dateStr);
+    return !!d && d.getFullYear()===y && d.getMonth()===m;
+  };
+  const now = new Date();
+  const isCurrentOrFutureMonth = monthCursor.y > now.getFullYear() ||
+    (monthCursor.y === now.getFullYear() && monthCursor.m >= now.getMonth());
+
+  const monthlyRows = useMemo(
+    () => computeCosts(inMonthFilter(monthCursor.y, monthCursor.m)),
+    [locData, fleet, viewLoc, monthCursor]
+  );
+  const monthTotal = monthlyRows.reduce((s,r)=>s+r.total,0);
+  const monthKm    = monthlyRows.filter(r=>r.kmDriven).reduce((s,r)=>s+(r.kmDriven||0),0);
+
+  const prevCursor = monthCursor.m === 0 ? {y:monthCursor.y-1, m:11} : {y:monthCursor.y, m:monthCursor.m-1};
+  const prevTotal = useMemo(() => {
+    const rows = computeCosts(inMonthFilter(prevCursor.y, prevCursor.m));
+    return rows.reduce((s,r)=>s+r.total,0);
+  }, [locData, fleet, viewLoc, monthCursor]);
+  const monthDelta = prevTotal > 0 ? ((monthTotal - prevTotal) / prevTotal) * 100 : null;
+
+  // Trailing 6 months (oldest first) for the trend bars
+  const last6 = useMemo(() => {
+    const out = [];
+    for (let i=5; i>=0; i--) {
+      let y=monthCursor.y, m=monthCursor.m-i;
+      while (m < 0) { m += 12; y -= 1; }
+      const rows = computeCosts(inMonthFilter(y,m));
+      out.push({ y, m, total: rows.reduce((s,r)=>s+r.total,0) });
+    }
+    return out;
+  }, [locData, fleet, viewLoc, monthCursor]);
+  const last6Max = Math.max(1, ...last6.map(x=>x.total));
 
   return (
     <>
       <FleetAlerts fleet={fleet} locData={locData} onOpenVehicle={setDetailVehicle}/>
 
-      {/* Location filter */}
+      {/* Sub-tabs */}
+      <div className="tabs">
+        <button className={`tab${costTab==="lifetime"?" active":""}`} onClick={()=>setCostTab("lifetime")}>Lifetime</button>
+        <button className={`tab${costTab==="monthly"?" active":""}`} onClick={()=>setCostTab("monthly")}>Monthly</button>
+      </div>
+
+      {/* Location filter — shared by both tabs */}
       <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
         {[{id:"all",name:"All Locations"},...LOCATIONS].map(l=>(
           <button key={l.id} className={`btn ${viewLoc===l.id?"btn-primary":"btn-ghost"}`}
@@ -1782,131 +1836,203 @@ function CostSummary({ locData, fleet }) {
         ))}
       </div>
 
-      {/* Summary strip */}
-      <div className="strip">
-        <div className="strip-item">
-          <div className="strip-label">Total Fleet Cost</div>
-          <div className="strip-val">{fmtR(grand)}</div>
+      {/* ═══════════════════ LIFETIME TAB ═══════════════════ */}
+      {costTab==="lifetime" && (<>
+        <div style={{fontSize:11,color:T.muted,marginBottom:14,lineHeight:1.6}}>
+          Totals since you started using this app — everything ever logged, with no monthly reset.
+          Switch to the <strong style={{color:T.cream}}>Monthly</strong> tab to see a specific month or compare month to month.
         </div>
-        <div className="strip-item">
-          <div className="strip-label">Total KM Tracked</div>
-          <div className="strip-val">{totalKm > 0 ? `${totalKm.toLocaleString()} km` : "—"}</div>
+
+        <div className="strip">
+          <div className="strip-item"><div className="strip-label">Total Fleet Cost</div><div className="strip-val">{fmtR(grand)}</div></div>
+          <div className="strip-item"><div className="strip-label">Total KM Tracked</div>
+            <div className="strip-val">{totalKm > 0 ? `${totalKm.toLocaleString()} km` : "—"}</div></div>
+          <div className="strip-item"><div className="strip-label">Fleet Avg Cost / KM</div>
+            <div className="strip-val" style={{color: fleetAvgCpkm ? T.goldLt : T.muted}}>
+              {fleetAvgCpkm ? `R ${fleetAvgCpkm.toFixed(2)}` : "—"}
+            </div></div>
+          <div className="strip-item"><div className="strip-label">Diesel Rate</div><div className="strip-val" style={{color:T.fuel_d}}>R{DIESEL_PRICE}/L</div></div>
+          <div className="strip-item"><div className="strip-label">Petrol Rate</div><div className="strip-val" style={{color:T.fuel_p}}>R{PETROL_PRICE}/L</div></div>
         </div>
-        <div className="strip-item">
-          <div className="strip-label">Fleet Avg Cost / KM</div>
-          <div className="strip-val" style={{color: fleetAvgCpkm ? T.goldLt : T.muted}}>
-            {fleetAvgCpkm ? `R ${fleetAvgCpkm.toFixed(2)}` : "—"}
+
+        {lifetime.length > 0 && withCpkm.length === 0 && (
+          <div style={{background:"rgba(201,125,58,.07)",border:`1px solid rgba(201,125,58,.22)`,borderRadius:6,
+            padding:"9px 13px",marginBottom:16,fontSize:12,color:T.muted}}>
+            Tip: Cost/km is calculated from odometer readings on fuel issues. Add mileage when logging diesel or petrol issues to see cost per km.
           </div>
-        </div>
-        <div className="strip-item">
-          <div className="strip-label">Diesel Rate</div>
-          <div className="strip-val" style={{color:T.fuel_d}}>R{DIESEL_PRICE}/L</div>
-        </div>
-        <div className="strip-item">
-          <div className="strip-label">Petrol Rate</div>
-          <div className="strip-val" style={{color:T.fuel_p}}>R{PETROL_PRICE}/L</div>
-        </div>
-      </div>
+        )}
 
-      {/* Note about km tracking */}
-      {ytd.length > 0 && withCpkm.length === 0 && (
-        <div style={{background:"rgba(201,125,58,.07)",border:`1px solid rgba(201,125,58,.22)`,borderRadius:6,
-          padding:"9px 13px",marginBottom:16,fontSize:12,color:T.muted}}>
-          Tip: Cost/km is calculated from odometer readings on fuel issues. Add mileage when logging diesel or petrol issues to see cost per km.
-        </div>
-      )}
+        <div className="tbl-wrap"><table className="tbl">
+          <thead><tr>
+            <th>Vehicle / Equipment</th><th>Fuel</th><th className="num">Fuel Cost</th><th className="num">Parts</th>
+            <th className="num">Repairs</th><th className="num">Total</th><th className="num">KM Driven</th>
+            <th className="num">Cost / KM</th><th>Bar</th>
+          </tr></thead>
+          <tbody>
+            {lifetime.map(r => (
+              <tr key={r.id}>
+                <td style={{fontWeight:600}}>
+                  <button onClick={()=>{ const v = fleet.find(x=>x.id===r.id); if (v) setDetailVehicle(v); }}
+                    style={{background:"none",border:"none",padding:0,textAlign:"left",cursor:"pointer",
+                      fontFamily:"'Inter',sans-serif",fontSize:13,fontWeight:600,color:T.cream,borderBottom:`1px dotted ${T.border}`}}>
+                    {r.name}
+                  </button>
+                </td>
+                <td><span className={`badge badge-${r.fuel_type==="diesel"?"d":"p"}`}>{r.fuel_type}</span></td>
+                <td className="num">{fmtR(r.fuel)}</td>
+                <td className="num">{fmtR(r.parts)}</td>
+                <td className="num">{fmtR(r.repairs)}</td>
+                <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.total)}</td>
+                <td className="num" style={{color:T.muted}}>
+                  {r.kmDriven !== null ? <span style={{color:T.cream}}>{r.kmDriven.toLocaleString()} km</span> : <span style={{color:T.border,fontSize:11}}>no odo</span>}
+                </td>
+                <td className="num">
+                  {r.costPerKm !== null ? (
+                    <span style={{fontWeight:700,fontFamily:"'Space Mono'",color: r.costPerKm < 3 ? T.ok : r.costPerKm < 7 ? T.gold : T.danger}}>
+                      R {r.costPerKm.toFixed(2)}
+                    </span>
+                  ) : <span style={{color:T.border,fontSize:11}}>—</span>}
+                </td>
+                <td style={{width:100}}>
+                  <div className="gauge-wrap" style={{marginTop:0}}>
+                    <div className="gauge-fill" style={{width:`${grand>0?r.total/grand*100:0}%`,background:T.gold}}/>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {lifetime.length===0 && <tr><td colSpan={9} className="empty">No cost data yet</td></tr>}
+          </tbody>
+        </table></div>
 
-      {/* Main table */}
-      <div className="tbl-wrap"><table className="tbl">
-        <thead>
-          <tr>
-            <th>Vehicle / Equipment</th>
-            <th>Fuel</th>
-            <th className="num">Fuel Cost</th>
-            <th className="num">Parts</th>
-            <th className="num">Repairs</th>
-            <th className="num">Total</th>
-            <th className="num">KM Driven</th>
-            <th className="num">Cost / KM</th>
-            <th>Bar</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ytd.map(r => (
-            <tr key={r.id}>
-              <td style={{fontWeight:600}}>
-                <button onClick={()=>{
-                    const v = fleet.find(x=>x.id===r.id);
-                    if (v) setDetailVehicle(v);
-                  }}
-                  style={{background:"none",border:"none",padding:0,textAlign:"left",cursor:"pointer",
-                    fontFamily:"'Inter',sans-serif",fontSize:13,fontWeight:600,color:T.cream,
-                    borderBottom:`1px dotted ${T.border}`}}>
-                  {r.name}
-                </button>
-              </td>
-              <td><span className={`badge badge-${r.fuel_type==="diesel"?"d":"p"}`}>{r.fuel_type}</span></td>
-              <td className="num">{fmtR(r.fuel)}</td>
-              <td className="num">{fmtR(r.parts)}</td>
-              <td className="num">{fmtR(r.repairs)}</td>
-              <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.total)}</td>
-              <td className="num" style={{color:T.muted}}>
-                {r.kmDriven !== null
-                  ? <span style={{color:T.cream}}>{r.kmDriven.toLocaleString()} km</span>
-                  : <span style={{color:T.border,fontSize:11}}>no odo</span>}
-              </td>
-              <td className="num">
-                {r.costPerKm !== null ? (
-                  <span style={{
-                    fontWeight:700,
-                    fontFamily:"'Space Mono'",
-                    color: r.costPerKm < 3 ? T.ok : r.costPerKm < 7 ? T.gold : T.danger
-                  }}>
-                    R {r.costPerKm.toFixed(2)}
-                  </span>
-                ) : (
-                  <span style={{color:T.border,fontSize:11}}>—</span>
-                )}
-              </td>
-              <td style={{width:100}}>
-                <div className="gauge-wrap" style={{marginTop:0}}>
-                  <div className="gauge-fill" style={{width:`${grand>0?r.total/grand*100:0}%`,background:T.gold}}/>
-                </div>
-              </td>
-            </tr>
+        {lifetime.length > 0 && (
+          <div style={{fontSize:11,color:T.muted,marginTop:10}}>Tap a vehicle name to see its full repair, parts and fuel history.</div>
+        )}
+
+        {withCpkm.length > 0 && (
+          <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
+            {[
+              {color:T.ok,    label:"< R3.00/km — efficient"},
+              {color:T.gold,  label:"R3.00–R7.00/km — average"},
+              {color:T.danger,label:"> R7.00/km — review costs"},
+            ].map(l=>(
+              <div key={l.label} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:T.muted}}>
+                <span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:l.color}}/>
+                {l.label}
+              </div>
+            ))}
+          </div>
+        )}
+      </>)}
+
+      {/* ═══════════════════ MONTHLY TAB ═══════════════════ */}
+      {costTab==="monthly" && (<>
+        {/* Month navigator */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+          <button className="btn btn-ghost btn-sm"
+            onClick={()=>setMonthCursor(c=>{ const m=c.m-1; return m<0?{y:c.y-1,m:11}:{y:c.y,m}; })}>
+            &#8592; Prev
+          </button>
+          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,fontWeight:600,color:T.cream}}>
+            {monthLabel(monthCursor.y, monthCursor.m)}
+          </div>
+          <button className="btn btn-ghost btn-sm" disabled={isCurrentOrFutureMonth}
+            style={{opacity:isCurrentOrFutureMonth?.4:1}}
+            onClick={()=>setMonthCursor(c=>{ const m=c.m+1; return m>11?{y:c.y+1,m:0}:{y:c.y,m}; })}>
+            Next &#8594;
+          </button>
+        </div>
+
+        <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:6,
+          padding:"9px 13px",marginBottom:16,fontSize:12,color:T.muted,lineHeight:1.6}}>
+          Parts costs aren't included here — individual part issues don't carry their own date in the
+          data, only a running total per vehicle, so they can't be split out by month. See the
+          <strong style={{color:T.cream}}> Lifetime</strong> tab for full parts totals.
+        </div>
+
+        {/* Comparison strip */}
+        <div className="strip">
+          <div className="strip-item"><div className="strip-label">This Month</div><div className="strip-val">{fmtR(monthTotal)}</div></div>
+          <div className="strip-item"><div className="strip-label">Previous Month</div>
+            <div className="strip-val" style={{color:T.muted}}>{prevTotal>0?fmtR(prevTotal):"—"}</div></div>
+          <div className="strip-item"><div className="strip-label">Change</div>
+            <div className="strip-val" style={{color: monthDelta===null?T.muted : monthDelta>0?T.danger:T.ok}}>
+              {monthDelta===null ? "—" : `${monthDelta>0?"+":""}${monthDelta.toFixed(1)}%`}
+            </div></div>
+          <div className="strip-item"><div className="strip-label">KM This Month</div>
+            <div className="strip-val">{monthKm > 0 ? `${monthKm.toLocaleString()} km` : "—"}</div></div>
+        </div>
+
+        {/* Per-vehicle monthly table */}
+        <div className="tbl-wrap"><table className="tbl">
+          <thead><tr>
+            <th>Vehicle / Equipment</th><th>Fuel</th><th className="num">Fuel Cost</th>
+            <th className="num">Repairs</th><th className="num">Total</th><th className="num">KM Driven</th>
+            <th className="num">Cost / KM</th><th>Bar</th>
+          </tr></thead>
+          <tbody>
+            {monthlyRows.map(r => (
+              <tr key={r.id}>
+                <td style={{fontWeight:600}}>
+                  <button onClick={()=>{ const v = fleet.find(x=>x.id===r.id); if (v) setDetailVehicle(v); }}
+                    style={{background:"none",border:"none",padding:0,textAlign:"left",cursor:"pointer",
+                      fontFamily:"'Inter',sans-serif",fontSize:13,fontWeight:600,color:T.cream,borderBottom:`1px dotted ${T.border}`}}>
+                    {r.name}
+                  </button>
+                </td>
+                <td><span className={`badge badge-${r.fuel_type==="diesel"?"d":"p"}`}>{r.fuel_type}</span></td>
+                <td className="num">{fmtR(r.fuel)}</td>
+                <td className="num">{fmtR(r.repairs)}</td>
+                <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.total)}</td>
+                <td className="num" style={{color:T.muted}}>
+                  {r.kmDriven !== null ? <span style={{color:T.cream}}>{r.kmDriven.toLocaleString()} km</span> : <span style={{color:T.border,fontSize:11}}>no odo</span>}
+                </td>
+                <td className="num">
+                  {r.costPerKm !== null ? (
+                    <span style={{fontWeight:700,fontFamily:"'Space Mono'",color: r.costPerKm < 3 ? T.ok : r.costPerKm < 7 ? T.gold : T.danger}}>
+                      R {r.costPerKm.toFixed(2)}
+                    </span>
+                  ) : <span style={{color:T.border,fontSize:11}}>—</span>}
+                </td>
+                <td style={{width:100}}>
+                  <div className="gauge-wrap" style={{marginTop:0}}>
+                    <div className="gauge-fill" style={{width:`${monthTotal>0?r.total/monthTotal*100:0}%`,background:T.gold}}/>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {monthlyRows.length===0 && <tr><td colSpan={8} className="empty">No cost data for {monthLabel(monthCursor.y,monthCursor.m)}</td></tr>}
+          </tbody>
+        </table></div>
+
+        {/* 6-month trend */}
+        <div className="section-title" style={{marginTop:26}}>Last 6 Months</div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:8}}>
+          {last6.map(x=>(
+            <div key={`${x.y}-${x.m}`} style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:90,fontSize:11,color:T.muted,flexShrink:0}}>{monthLabel(x.y,x.m).replace(` ${x.y}`,"")}</div>
+              <div style={{flex:1,height:16,background:"rgba(0,0,0,.25)",borderRadius:4,overflow:"hidden"}}>
+                <div style={{
+                  height:"100%",
+                  width:`${last6Max>0?(x.total/last6Max*100):0}%`,
+                  background: (x.y===monthCursor.y && x.m===monthCursor.m) ? T.gold : T.navyLt,
+                  borderRadius:4,
+                }}/>
+              </div>
+              <div style={{width:90,textAlign:"right",fontSize:12,fontFamily:"'Space Mono'",color:T.muted,flexShrink:0}}>
+                {x.total>0?fmtR(x.total):"—"}
+              </div>
+            </div>
           ))}
-          {ytd.length===0 && <tr><td colSpan={9} className="empty">No cost data yet</td></tr>}
-        </tbody>
-      </table></div>
-
-      {ytd.length > 0 && (
-        <div style={{fontSize:11,color:T.muted,marginTop:10}}>
-          Tap a vehicle name to see its full repair, parts and fuel history.
         </div>
-      )}
+      </>)}
 
       {detailVehicle && (
         <VehicleDetail vehicle={detailVehicle} locData={locData} onClose={()=>setDetailVehicle(null)}/>
       )}
-
-      {/* Cost/km legend */}
-      {withCpkm.length > 0 && (
-        <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
-          {[
-            {color:T.ok,    label:"< R3.00/km — efficient"},
-            {color:T.gold,label:"R3.00–R7.00/km — average"},
-            {color:T.danger,label:"> R7.00/km — review costs"},
-          ].map(l=>(
-            <div key={l.label} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:T.muted}}>
-              <span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:l.color}}/>
-              {l.label}
-            </div>
-          ))}
-        </div>
-      )}
     </>
   );
 }
+
 
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
