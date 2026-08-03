@@ -387,9 +387,9 @@ function Dashboard({ locId, loc, fleet, locData }) {
   const dieselIssued  = loc.dieselIssues.reduce((s,e)=>s+(e.litres||0),0);
   const petrolIssued  = loc.petrolIssues.reduce((s,e)=>s+Math.abs(e.litres<0?e.litres:0),0);
   const totalRepairs  = loc.repairs.reduce((s,e)=>s+(e.totalCost||0),0);
-  const totalParts    = loc.parts.reduce((s,p)=>{
-    const qty = Object.values(p.issues||{}).reduce((a,b)=>a+b,0);
-    return s+qty*p.openCost;
+  const totalParts    = (loc.partIssues||[]).reduce((s,iss)=>{
+    const unitCost = loc.parts.find(p=>p.id===iss.partId)?.openCost || 0;
+    return s+iss.qty*unitCost;
   },0);
   const locColor = LOC_COLORS[locId];
 
@@ -916,13 +916,15 @@ function PetrolInventory({ loc, setLoc, fleet }) {
 }
 
 // ─── PARTS & STOCK ───────────────────────────────────────────────────────────
-function PartsStock({ loc, setLoc, isAdmin, fleet }) {
+function PartsStock({ loc, locId, setLoc, isAdmin, fleet }) {
   const parts=loc.parts;
+  const partIssues=loc.partIssues||[];
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
   const [showIssue,setShowIssue]=useState(false);
+  const [issueBusy,setIssueBusy]=useState(false);
   const [form,setForm]=useState({description:"",storeroom:"",shelf:"",location:"",unit:"each",openCost:"",openQty:"",purchaseQty:"",purchaseCost:"",purchaseFrom:"",closingQty:""});
-  const [issueForm,setIssueForm]=useState({partId:"",vehicle:"",qty:""});
+  const [issueForm,setIssueForm]=useState({partId:"",vehicle:"",qty:"",date:today()});
 
   const addPart=()=>{
     const p={...form,id:uid(),openCost:parseFloat(form.openCost)||0,openQty:parseFloat(form.openQty)||0,purchaseQty:parseFloat(form.purchaseQty)||0,purchaseCost:parseFloat(form.purchaseCost)||0,closingQty:parseFloat(form.closingQty)||0,issues:{}};
@@ -931,18 +933,45 @@ function PartsStock({ loc, setLoc, isAdmin, fleet }) {
     setShowForm(false);
   };
 
-  const issuePart=()=>{
+  // Writes directly to Supabase rather than relying on the whole-location
+  // diff-sync, since that sync only detects rows being added/removed by id —
+  // it can't see an in-place edit to an existing part's closing quantity.
+  const issuePart=async()=>{
     const qty = parseFloat(issueForm.qty)||0;
     if (!issueForm.partId || !issueForm.vehicle || qty<=0) return;
-    const updatedParts = parts.map(p=>{
-      if (p.id !== issueForm.partId) return p;
-      const newIssues = {...(p.issues||{})};
-      newIssues[issueForm.vehicle] = (newIssues[issueForm.vehicle]||0) + qty;
-      return {...p, issues:newIssues, closingQty: Math.max(0,(p.closingQty||0)-qty)};
-    });
-    upd({parts:updatedParts});
-    setIssueForm({partId:"",vehicle:"",qty:""});
-    setShowIssue(false);
+    setIssueBusy(true);
+    try{
+      const part = parts.find(p=>p.id===issueForm.partId);
+      const newClosingQty = Math.max(0,(part?.closingQty||0)-qty);
+      const row = {id:uid(), location_id:locId, part_id:issueForm.partId, vehicle_id:issueForm.vehicle, date:issueForm.date, qty, notes:null};
+
+      await sb.insert("parts_issues", row);
+      await sb.update("parts", issueForm.partId, {closing_qty:newClosingQty});
+
+      upd({
+        parts: parts.map(p=>p.id===issueForm.partId?{...p,closingQty:newClosingQty}:p),
+        partIssues: [...partIssues, {id:row.id,date:row.date,partId:row.part_id,vehicle:row.vehicle_id,qty:row.qty,notes:""}],
+      });
+      setIssueForm({partId:"",vehicle:"",qty:"",date:today()});
+      setShowIssue(false);
+    }catch(e){ alert("Could not issue part: "+e.message); }
+    finally{ setIssueBusy(false); }
+  };
+
+  // Deleting an issue record restores the quantity to closing stock —
+  // treated as "undo this issue" rather than just erasing the log entry.
+  const deleteIssue=async(iss)=>{
+    if(!window.confirm("Delete this issue record? The quantity will be added back to closing stock."))return;
+    try{
+      const part = parts.find(p=>p.id===iss.partId);
+      const restoredQty = (part?.closingQty||0)+iss.qty;
+      await sb.delete("parts_issues", iss.id);
+      if(part) await sb.update("parts", part.id, {closing_qty:restoredQty});
+      upd({
+        parts: parts.map(p=>p.id===iss.partId?{...p,closingQty:restoredQty}:p),
+        partIssues: partIssues.filter(x=>x.id!==iss.id),
+      });
+    }catch(e){ alert("Error: "+e.message); }
   };
 
   const totalValue=parts.reduce((s,p)=>{
@@ -951,6 +980,16 @@ function PartsStock({ loc, setLoc, isAdmin, fleet }) {
   },0);
   const totalPurchases=parts.reduce((s,p)=>s+(p.purchaseCost||0),0);
 
+  const recentIssues = useMemo(()=>{
+    return [...partIssues].sort((a,b)=>{
+      const da=parseDMY(a.date), db=parseDMY(b.date);
+      return (db?db.getTime():0)-(da?da.getTime():0);
+    }).slice(0,25);
+  },[partIssues]);
+  const partName = id => parts.find(p=>p.id===id)?.description || "(deleted part)";
+  const vehicleName = id => (fleet||[]).find(v=>v.id===id)?.name || id || "—";
+  const partUnitCost = id => parts.find(p=>p.id===id)?.openCost || 0;
+
   return(
     <>
       <div className="strip">
@@ -958,7 +997,7 @@ function PartsStock({ loc, setLoc, isAdmin, fleet }) {
         <div className="strip-item"><div className="strip-label">Purchases This Month</div><div className="strip-val">{fmtR(totalPurchases)}</div></div>
         <div className="strip-item"><div className="strip-label">Line Items</div><div className="strip-val">{parts.length}</div></div>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
-          <button className="btn btn-ghost" onClick={()=>setShowIssue(true)}>Issue Part</button>
+          <button className="btn btn-ghost" onClick={()=>{setIssueForm({partId:"",vehicle:"",qty:"",date:today()});setShowIssue(true);}}>Issue Part</button>
           <button className="btn btn-primary" onClick={()=>setShowForm(true)}>+ Add Part</button>
         </div>
       </div>
@@ -986,6 +1025,33 @@ function PartsStock({ loc, setLoc, isAdmin, fleet }) {
           {parts.length===0&&<tr><td colSpan={11} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No parts recorded at this location</td></tr>}
         </tbody>
       </table></div>
+
+      {partIssues.length>0 && (
+        <div style={{marginTop:22}}>
+          <div className="section-title">Recent Issues</div>
+          <div className="tbl-wrap"><table className="tbl">
+            <thead><tr><th>Date</th><th>Part</th><th>Vehicle</th><th className="num">Qty</th><th className="num">Value</th><th></th></tr></thead>
+            <tbody>
+              {recentIssues.map(iss=>(
+                <tr key={iss.id}>
+                  <td className="mono" style={{fontSize:11,color:iss.date?T.cream:T.muted}}>
+                    {iss.date || "unknown (migrated)"}
+                  </td>
+                  <td style={{fontWeight:600}}>{partName(iss.partId)}</td>
+                  <td style={{fontSize:12,color:T.muted}}>{vehicleName(iss.vehicle)}</td>
+                  <td className="num">{iss.qty}</td>
+                  <td className="num" style={{color:T.muted}}>{fmtR(iss.qty*partUnitCost(iss.partId))}</td>
+                  <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>deleteIssue(iss)}>x</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+          {partIssues.length>25 && (
+            <div style={{fontSize:11,color:T.muted,marginTop:6}}>Showing the 25 most recent of {partIssues.length} issues.</div>
+          )}
+        </div>
+      )}
+
       {showForm&&(
         <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
           <div className="modal">
@@ -1029,8 +1095,9 @@ function PartsStock({ loc, setLoc, isAdmin, fleet }) {
                 {(fleet||[]).map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             </div>
+            <div className="field"><label>Date</label><DateField value={issueForm.date} onChange={v=>setIssueForm(f=>({...f,date:v}))}/></div>
             <div className="field"><label>Quantity</label><input type="number" min="0" value={issueForm.qty} onChange={e=>setIssueForm(f=>({...f,qty:e.target.value}))}/></div>
-            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={issuePart}>Issue Part</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></div>
+            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={issuePart} disabled={issueBusy}>{issueBusy?"Issuing...":"Issue Part"}</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)} disabled={issueBusy}>Cancel</button></div>
           </div>
         </div>
       )}
@@ -1348,11 +1415,12 @@ function VehicleDetail({ vehicle, locData, onClose }) {
         if (r.vehicle === vehicle.id) repairs.push({ ...r, locId:l.id, locName:l.name });
       });
 
-      (loc.parts||[]).forEach(p => {
-        const qty = (p.issues||{})[vehicle.id];
-        if (qty) parts.push({
-          id: `${l.id}-${p.id}`, description: p.description, unit: p.unit,
-          qty, unitCost: p.openCost||0, value: qty * (p.openCost||0),
+      (loc.partIssues||[]).forEach(iss => {
+        if (iss.vehicle !== vehicle.id) return;
+        const p = (loc.parts||[]).find(x=>x.id===iss.partId);
+        parts.push({
+          id: iss.id, date: iss.date || "", description: p?.description || "(deleted part)",
+          unit: p?.unit || "", qty: iss.qty, unitCost: p?.openCost||0, value: iss.qty*(p?.openCost||0),
           locId: l.id, locName: l.name,
         });
       });
@@ -1380,6 +1448,7 @@ function VehicleDetail({ vehicle, locData, onClose }) {
     };
     repairs.sort(byDateDesc);
     fuel.sort(byDateDesc);
+    parts.sort(byDateDesc);
 
     const repairTotal = repairs.reduce((s,r)=>s+(r.totalCost||0),0);
     const partsTotal  = parts.reduce((s,p)=>s+p.value,0);
@@ -1486,11 +1555,12 @@ function VehicleDetail({ vehicle, locData, onClose }) {
         {/* PARTS */}
         {tab==="parts" && (
           <div className="tbl-wrap"><table className="tbl" style={{minWidth:0}}>
-            <thead><tr><th>Part</th><th>Where</th><th className="num">Qty</th>
+            <thead><tr><th>Date</th><th>Part</th><th>Where</th><th className="num">Qty</th>
               <th className="num">Unit Cost</th><th className="num">Value</th></tr></thead>
             <tbody>
               {data.parts.map(p=>(
                 <tr key={p.id}>
+                  <td className="mono" style={{fontSize:11,color:p.date?T.cream:T.muted}}>{p.date || "unknown"}</td>
                   <td style={{fontWeight:600}}>{p.description}</td>
                   <td><span className="badge badge-neu">{p.locId}</span></td>
                   <td className="num">{p.qty} <span style={{fontSize:10,color:T.muted}}>{p.unit}</span></td>
@@ -1498,7 +1568,7 @@ function VehicleDetail({ vehicle, locData, onClose }) {
                   <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(p.value)}</td>
                 </tr>
               ))}
-              {data.parts.length===0&&<tr><td colSpan={5} className="empty">No parts allocated to this vehicle</td></tr>}
+              {data.parts.length===0&&<tr><td colSpan={6} className="empty">No parts allocated to this vehicle</td></tr>}
             </tbody>
           </table></div>
         )}
@@ -1748,15 +1818,18 @@ function CostSummary({ locData, fleet }) {
         if (inMonth && !inMonth(e.date)) return;
         if (m[e.vehicle]) m[e.vehicle].repairs += e.totalCost||0;
       });
-      // Parts issues carry no date per transaction — only a running total per
-      // vehicle. They can only be attributed to "lifetime", never to a month.
-      if (!inMonth) {
-        loc.parts.forEach(p => {
-          Object.entries(p.issues||{}).forEach(([vid,qty]) => {
-            if (m[vid]) m[vid].parts += qty * p.openCost;
-          });
-        });
-      }
+      // Each part issue now carries its own date, same as fuel and repairs —
+      // no more special-casing needed here. Migrated historical rows (from
+      // before this tracking existed) have date = null, so inMonth correctly
+      // excludes them from any specific month while lifetime (inMonth=null)
+      // still counts them in full.
+      (loc.partIssues||[]).forEach(iss => {
+        if (inMonth && !inMonth(iss.date)) return;
+        if (m[iss.vehicle]) {
+          const unitCost = loc.parts.find(p=>p.id===iss.partId)?.openCost || 0;
+          m[iss.vehicle].parts += iss.qty * unitCost;
+        }
+      });
     });
 
     return Object.entries(m).map(([id, d]) => {
@@ -1944,9 +2017,9 @@ function CostSummary({ locData, fleet }) {
 
         <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:6,
           padding:"9px 13px",marginBottom:16,fontSize:12,color:T.muted,lineHeight:1.6}}>
-          Parts costs aren't included here — individual part issues don't carry their own date in the
-          data, only a running total per vehicle, so they can't be split out by month. See the
-          <strong style={{color:T.cream}}> Lifetime</strong> tab for full parts totals.
+          Parts issued before month-by-month tracking was switched on don't have a known date, so
+          they show up in <strong style={{color:T.cream}}>Lifetime</strong> but can't appear in any
+          specific month here. Anything issued from now on is dated and included below.
         </div>
 
         {/* Comparison strip */}
@@ -1965,7 +2038,7 @@ function CostSummary({ locData, fleet }) {
         {/* Per-vehicle monthly table */}
         <div className="tbl-wrap"><table className="tbl">
           <thead><tr>
-            <th>Vehicle / Equipment</th><th>Fuel</th><th className="num">Fuel Cost</th>
+            <th>Vehicle / Equipment</th><th>Fuel</th><th className="num">Fuel Cost</th><th className="num">Parts</th>
             <th className="num">Repairs</th><th className="num">Total</th><th className="num">KM Driven</th>
             <th className="num">Cost / KM</th><th>Bar</th>
           </tr></thead>
@@ -1981,6 +2054,7 @@ function CostSummary({ locData, fleet }) {
                 </td>
                 <td><span className={`badge badge-${r.fuel_type==="diesel"?"d":"p"}`}>{r.fuel_type}</span></td>
                 <td className="num">{fmtR(r.fuel)}</td>
+                <td className="num">{fmtR(r.parts)}</td>
                 <td className="num">{fmtR(r.repairs)}</td>
                 <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.total)}</td>
                 <td className="num" style={{color:T.muted}}>
@@ -2000,7 +2074,7 @@ function CostSummary({ locData, fleet }) {
                 </td>
               </tr>
             ))}
-            {monthlyRows.length===0 && <tr><td colSpan={8} className="empty">No cost data for {monthLabel(monthCursor.y,monthCursor.m)}</td></tr>}
+            {monthlyRows.length===0 && <tr><td colSpan={9} className="empty">No cost data for {monthLabel(monthCursor.y,monthCursor.m)}</td></tr>}
           </tbody>
         </table></div>
 
@@ -2049,7 +2123,7 @@ const PAGES = [
 const emptyLoc = () => ({
   dieselDeliveries:[], dieselIssues:[], dieselDips:[], dieselOpening:0,
   petrolPurchases:[], petrolIssues:[], petrolOpening:0,
-  parts:[], repairs:[],
+  parts:[], partIssues:[], repairs:[],
 });
 
 // ─── SUPABASE SYNC ────────────────────────────────────────────────────────────
@@ -2224,7 +2298,7 @@ export default function App() {
   const loadAll = useCallback(async () => {
     setLoading(true); setLoadErr(null);
     try {
-      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,repRows] = await Promise.all([
+      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,repRows] = await Promise.all([
         sb.select("fleet"),
         sb.select("diesel_deliveries"),
         sb.select("diesel_issues"),
@@ -2234,6 +2308,7 @@ export default function App() {
         sb.select("petrol_issues"),
         sb.select("petrol_opening"),
         sb.select("parts"),
+        sb.select("parts_issues"),
         sb.select("repairs"),
       ]);
 
@@ -2257,6 +2332,7 @@ export default function App() {
         nd[lid].petrolIssues     = pIss.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,vehicle:r.vehicle_id||"",mileage:r.mileage||"",notes:r.notes||""}));
         nd[lid].petrolOpening    = +(pOpen.find(r=>r.location_id===lid)?.litres||0);
         nd[lid].parts            = partsRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,description:r.description,storeroom:r.storeroom||"",shelf:r.shelf||"",location:r.position||"",unit:r.unit||"each",openCost:+r.open_cost,openQty:+r.open_qty,purchaseQty:+r.purchase_qty,purchaseCost:+r.purchase_cost,purchaseFrom:r.purchase_from||"",closingQty:+r.closing_qty,issues:r.issues||{}}));
+        nd[lid].partIssues       = partIssRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date||"",partId:r.part_id,vehicle:r.vehicle_id||"",qty:+r.qty,notes:r.notes||""}));
         nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||""}));
       });
       setLocData(nd);
@@ -2467,7 +2543,7 @@ export default function App() {
             {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData}/>}
             {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
             {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet}/>}
-            {page==="parts"     && <PartsStock loc={loc} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet}/>}
+            {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet}/>}
             {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
             {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData}/>}
             {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet}/>}
