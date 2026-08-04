@@ -946,7 +946,7 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet }) {
       const row = {id:uid(), location_id:locId, part_id:issueForm.partId, vehicle_id:issueForm.vehicle, date:issueForm.date, qty, notes:null};
 
       await sb.insert("parts_issues", row);
-      await sb.update("parts", issueForm.partId, {closing_qty:newClosingQty});
+      await sb.patch("parts", issueForm.partId, {closing_qty:newClosingQty});
 
       upd({
         parts: parts.map(p=>p.id===issueForm.partId?{...p,closingQty:newClosingQty}:p),
@@ -966,7 +966,7 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet }) {
       const part = parts.find(p=>p.id===iss.partId);
       const restoredQty = (part?.closingQty||0)+iss.qty;
       await sb.delete("parts_issues", iss.id);
-      if(part) await sb.update("parts", part.id, {closing_qty:restoredQty});
+      if(part) await sb.patch("parts", part.id, {closing_qty:restoredQty});
       upd({
         parts: parts.map(p=>p.id===iss.partId?{...p,closingQty:restoredQty}:p),
         partIssues: partIssues.filter(x=>x.id!==iss.id),
