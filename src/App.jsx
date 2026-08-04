@@ -383,7 +383,7 @@ function StockBanner({ cards }) {
 }
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
-function Dashboard({ locId, loc, fleet, locData }) {
+function Dashboard({ locId, loc, fleet, locData, serviceJobs }) {
   const dieselIssued  = loc.dieselIssues.reduce((s,e)=>s+(e.litres||0),0);
   const petrolIssued  = loc.petrolIssues.reduce((s,e)=>s+Math.abs(e.litres<0?e.litres:0),0);
   const totalRepairs  = loc.repairs.reduce((s,e)=>s+(e.totalCost||0),0);
@@ -395,7 +395,7 @@ function Dashboard({ locId, loc, fleet, locData }) {
 
   return (
     <>
-      <FleetAlerts fleet={fleet} locData={locData||{}}/>
+      <FleetAlerts fleet={fleet} locData={locData||{}} serviceJobs={serviceJobs}/>
 
       <div className="kpi-row">
         <KPI label="Diesel Issued" value={fmtL(dieselIssued)} sub="From bulk tank this month" accent={T.fuel_d} pct={dieselIssued/500*100}/>
@@ -1357,8 +1357,49 @@ function buildFleetAlerts(fleet, locData) {
   return rows.sort((a,b) => (a.state==="overdue"?0:1) - (b.state==="overdue"?0:1));
 }
 
+// ─── SELF-SERVICED VEHICLES -> MAINTENANCE JOB CARDS ─────────────────────────
+// Both apps share one Supabase project. This writes directly into the
+// Maintenance app's own tables (maint_jobs / maint_job_materials) — there's
+// no API between the two apps, just the shared database, same as everything
+// else in this build. Runs once per full data load (from loadAll), not from
+// FleetAlerts, since that component renders on three different pages and
+// would otherwise trigger this repeatedly.
+async function syncServiceJobs(fleet, locData) {
+  const odo = latestOdometers(locData);
+  const due = fleet.filter(v => {
+    if (!v.self_serviced || !v.service_location_id) return false;
+    const st = vehicleStatus(v, odo[v.id]);
+    return st.service && (st.service.state === "soon" || st.service.state === "overdue");
+  });
+
+  const result = {}; // vehicleId -> { open: true }
+  if (due.length === 0) return result;
+
+  try {
+    // One query for every currently-open vehicle-linked job, rather than one per vehicle.
+    const openJobs = await sb.select("maint_jobs", "vehicle_id=not.is.null&status=in.(scheduled,in_progress)");
+    const openByVehicle = new Set(openJobs.map(j => j.vehicle_id));
+
+    for (const v of due) {
+      if (openByVehicle.has(v.id)) { result[v.id] = { open:true }; continue; }
+      const row = {
+        id: uid(), location_id: v.service_location_id, template_id: null, vehicle_id: v.id,
+        name: `Service: ${v.name}`,
+        description: "Auto-created from Operations — this vehicle is due for scheduled service. Add the parts/materials needed below.",
+        job_type: "preventive", destination_id: null, dest_name: null,
+        assigned_to: null, due_date: today(), status: "scheduled",
+      };
+      await sb.insert("maint_jobs", row);
+      result[v.id] = { open:true, justCreated:true };
+    }
+  } catch (e) {
+    console.error("syncServiceJobs:", e);
+  }
+  return result;
+}
+
 // ─── FLEET ALERTS BANNER ─────────────────────────────────────────────────────
-function FleetAlerts({ fleet, locData, onOpenVehicle }) {
+function FleetAlerts({ fleet, locData, onOpenVehicle, serviceJobs }) {
   const alerts = useMemo(() => buildFleetAlerts(fleet, locData), [fleet, locData]);
   if (alerts.length === 0) return null;
 
@@ -1375,7 +1416,9 @@ function FleetAlerts({ fleet, locData, onOpenVehicle }) {
         Fleet Attention Needed ({alerts.length})
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-        {alerts.map((a,i) => (
+        {alerts.map((a,i) => {
+          const sentToMaint = a.kind==="Service" && a.vehicle.self_serviced && serviceJobs?.[a.vehicle.id]?.open;
+          return (
           <button key={i}
             onClick={() => onOpenVehicle && onOpenVehicle(a.vehicle)}
             style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap",background:"none",
@@ -1389,8 +1432,12 @@ function FleetAlerts({ fleet, locData, onOpenVehicle }) {
             }}>{a.kind}</span>
             <span style={{fontSize:13,fontWeight:600,color:T.cream}}>{a.vehicle.name}</span>
             <span style={{fontSize:12,color:T.muted}}>{a.detail}</span>
+            {sentToMaint && (
+              <span className="badge badge-v" style={{flexShrink:0}}>→ Job card in Maintenance</span>
+            )}
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -1602,13 +1649,14 @@ function VehicleDetail({ vehicle, locData, onClose }) {
   );
 }
 
-function FleetManager({ fleet, setFleet, sbFleet, locData }) {
+function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs }) {
   const [showForm, setShowForm] = useState(false);
   const [editEntry, setEditEntry] = useState(null);
   const [detailVehicle, setDetailVehicle] = useState(null);
   const BLANK_V = { name:"", id:"", category:"vehicle", fuel:"diesel",
     license_expiry:"", last_service_date:"", last_service_km:"",
-    service_interval_months:"", service_interval_km:"" };
+    service_interval_months:"", service_interval_km:"",
+    self_serviced:false, service_location_id:"" };
   const [form, setForm] = useState(BLANK_V);
 
   const odo = useMemo(()=>latestOdometers(locData||{}), [locData]);
@@ -1647,7 +1695,7 @@ function FleetManager({ fleet, setFleet, sbFleet, locData }) {
 
   return (
     <>
-      <FleetAlerts fleet={fleet} locData={locData||{}} onOpenVehicle={setDetailVehicle}/>
+      <FleetAlerts fleet={fleet} locData={locData||{}} onOpenVehicle={setDetailVehicle} serviceJobs={serviceJobs}/>
 
       <div className="strip">
         <div className="strip-item"><div className="strip-label">Vehicles</div><div className="strip-val">{vehicles.length}</div></div>
@@ -1669,8 +1717,10 @@ function FleetManager({ fleet, setFleet, sbFleet, locData }) {
                   <td style={{fontWeight:600}}>
                     <button onClick={()=>setDetailVehicle(v)}
                       style={{background:"none",border:"none",padding:0,color:T.cream,fontWeight:600,
-                        fontFamily:"'Inter',sans-serif",fontSize:13,cursor:"pointer",textAlign:"left"}}>
+                        fontFamily:"'Inter',sans-serif",fontSize:13,cursor:"pointer",textAlign:"left",
+                        display:"flex",alignItems:"center",gap:7}}>
                       {v.name}
+                      {v.self_serviced && <span className="badge badge-neu" title="Serviced in-house">In-house</span>}
                     </button>
                   </td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{v.id}</td>
@@ -1762,8 +1812,37 @@ function FleetManager({ fleet, setFleet, sbFleet, locData }) {
               </div>
             </div>
 
+            <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:7,padding:"12px 13px",marginBottom:6}}>
+              <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:form.self_serviced?12:0}}>
+                <input type="checkbox" checked={!!form.self_serviced}
+                  onChange={e=>setForm(f=>({...f,self_serviced:e.target.checked}))}
+                  style={{width:16,height:16,accentColor:T.gold,cursor:"pointer"}}/>
+                <span style={{fontSize:13,fontWeight:600,color:T.cream}}>We service this vehicle ourselves</span>
+              </label>
+              {form.self_serviced && (
+                <>
+                  <div className="field" style={{marginBottom:6}}>
+                    <label>Send job cards to</label>
+                    <select value={form.service_location_id} onChange={e=>setForm(f=>({...f,service_location_id:e.target.value}))}>
+                      <option value="">-- Select location's maintenance calendar --</option>
+                      {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                  </div>
+                  <div style={{fontSize:11,color:T.muted,lineHeight:1.55}}>
+                    When this vehicle comes due for service, a job card is created automatically on
+                    this location's Maintenance app calendar. Add the parts/materials needed over there —
+                    completing it there updates the Last Service Date above.
+                  </div>
+                </>
+              )}
+            </div>
+
             <div style={{display:"flex",gap:9}}>
-              <button className="btn btn-primary" onClick={save}>{editEntry?"Save Changes":"Add to Fleet"}</button>
+              <button className="btn btn-primary" onClick={save}
+                disabled={form.self_serviced && !form.service_location_id}
+                style={{opacity:(form.self_serviced && !form.service_location_id)?.5:1}}>
+                {editEntry?"Save Changes":"Add to Fleet"}
+              </button>
               <button className="btn btn-ghost" onClick={()=>setShowForm(false)}>Cancel</button>
             </div>
           </div>
@@ -1774,7 +1853,7 @@ function FleetManager({ fleet, setFleet, sbFleet, locData }) {
 }
 
 // ─── COST SUMMARY ────────────────────────────────────────────────────────────
-function CostSummary({ locData, fleet }) {
+function CostSummary({ locData, fleet, serviceJobs }) {
   const [viewLoc, setViewLoc]         = useState("all");
   const [detailVehicle, setDetailVehicle] = useState(null);
   const [costTab, setCostTab]         = useState("lifetime"); // "lifetime" | "monthly"
@@ -1891,7 +1970,7 @@ function CostSummary({ locData, fleet }) {
 
   return (
     <>
-      <FleetAlerts fleet={fleet} locData={locData} onOpenVehicle={setDetailVehicle}/>
+      <FleetAlerts fleet={fleet} locData={locData} onOpenVehicle={setDetailVehicle} serviceJobs={serviceJobs}/>
 
       {/* Sub-tabs */}
       <div className="tabs">
@@ -2180,6 +2259,8 @@ const fleetRow = v => ({
   last_service_km:         v.last_service_km === "" || v.last_service_km == null ? null : Number(v.last_service_km),
   service_interval_months: v.service_interval_months === "" || v.service_interval_months == null ? null : Number(v.service_interval_months),
   service_interval_km:     v.service_interval_km === "" || v.service_interval_km == null ? null : Number(v.service_interval_km),
+  self_serviced:           !!v.self_serviced,
+  service_location_id:     v.self_serviced ? (v.service_location_id || null) : null,
 });
 
 const sbFleet = {
@@ -2280,6 +2361,7 @@ export default function App() {
   const [locData, setLocData] = useState({ ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() });
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState(null);
+  const [serviceJobs, setServiceJobs] = useState({});
 
   const [locPickerOpen, setLocPickerOpen] = useState(false);
 
@@ -2319,6 +2401,8 @@ export default function App() {
         last_service_km:         r.last_service_km == null ? null : +r.last_service_km,
         service_interval_months: r.service_interval_months == null ? null : +r.service_interval_months,
         service_interval_km:     r.service_interval_km == null ? null : +r.service_interval_km,
+        self_serviced:           !!r.self_serviced,
+        service_location_id:     r.service_location_id || "",
       })));
 
       const nd = { ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() };
@@ -2336,6 +2420,18 @@ export default function App() {
         nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||""}));
       });
       setLocData(nd);
+
+      // Self-serviced vehicles due for service get a job card on the
+      // Maintenance app's calendar automatically. Runs after fleet/locData
+      // are both known so vehicleStatus (which needs odometer history) is accurate.
+      const fleetForSync = fleetRows.map(r=>({
+        id:r.id, name:r.name, self_serviced: !!r.self_serviced, service_location_id: r.service_location_id||"",
+        last_service_date: r.last_service_date||"", last_service_km: r.last_service_km==null?null:+r.last_service_km,
+        service_interval_months: r.service_interval_months==null?null:+r.service_interval_months,
+        service_interval_km: r.service_interval_km==null?null:+r.service_interval_km,
+        license_expiry: r.license_expiry||"",
+      }));
+      syncServiceJobs(fleetForSync, nd).then(setServiceJobs);
     } catch(e) {
       setLoadErr(e.message);
     } finally {
@@ -2540,13 +2636,13 @@ export default function App() {
           </div>
 
           <div className="section">
-            {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData}/>}
+            {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData} serviceJobs={serviceJobs}/>}
             {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
             {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet}/>}
             {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet}/>}
             {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
-            {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData}/>}
-            {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet}/>}
+            {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData} serviceJobs={serviceJobs}/>}
+            {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet} serviceJobs={serviceJobs}/>}
             {!isAdmin && (page==="dashboard"||page==="fleet"||page==="costs") && (
               <div className="empty">
                 <div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>
