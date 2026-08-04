@@ -12,7 +12,7 @@ const sb = {
     "Prefer":        "return=representation",
   },
   async select(table, filters="") {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?${filters}&order=created_at.asc`, { headers: sb.headers });
+    const res = await fetch(`${SB_URL}/rest/v1/${table}?${filters}&order=created_at.desc`, { headers: sb.headers });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -731,7 +731,8 @@ function PetrolInventory({ loc, setLoc, fleet }) {
   const [tab,setTab]=[...useState("issues")];
   const [showPurchase,setShowPurchase]=useState(false);
   const [showIssue,setShowIssue]=useState(false);
-  const [pForm,setPForm]=useState({date:today(),litres:"",pricePerLitre:"",station:"",notes:""});
+  const [pForm,setPForm]=useState({date:today(),litres:"",pricePerLitre:"",station:"",notes:"",
+    issueNow:false,issueVehicle:"",issueLitres:"",issueMileage:""});
   const [iForm,setIForm]=useState({date:today(),litres:"",vehicle:"",mileage:"",notes:""});
 
   const {petrolPurchases:purchases,petrolIssues:issues,petrolOpening:opening}=loc;
@@ -750,9 +751,26 @@ function PetrolInventory({ loc, setLoc, fleet }) {
     return Object.entries(m).sort((a,b)=>b[1]-a[1]);
   },[issues]);
 
+  const blankPForm = {date:today(),litres:"",pricePerLitre:"",station:"",notes:"",
+    issueNow:false,issueVehicle:"",issueLitres:"",issueMileage:""};
+
   const addPurchase=()=>{
-    upd({petrolPurchases:[...purchases,{...pForm,id:uid(),litres:parseFloat(pForm.litres)||0,pricePerLitre:parseFloat(pForm.pricePerLitre)||0}]});
-    setPForm({date:today(),litres:"",pricePerLitre:"",station:"",notes:""});setShowPurchase(false);
+    const purchaseRow = {date:pForm.date,litres:parseFloat(pForm.litres)||0,pricePerLitre:parseFloat(pForm.pricePerLitre)||0,
+      station:pForm.station,notes:pForm.notes,id:uid()};
+    const newPurchases = [...purchases,purchaseRow];
+
+    let newIssues = issues;
+    if (pForm.issueNow && pForm.issueVehicle && parseFloat(pForm.issueLitres)>0) {
+      const issueRow = {
+        id:uid(), date:pForm.date, vehicle:pForm.issueVehicle,
+        litres:-Math.abs(parseFloat(pForm.issueLitres)||0),
+        mileage:pForm.issueMileage, notes:"Filled up at purchase",
+      };
+      newIssues = [...issues, issueRow];
+    }
+
+    upd({petrolPurchases:newPurchases, petrolIssues:newIssues});
+    setPForm(blankPForm);setShowPurchase(false);
   };
   const addIssue=()=>{
     upd({petrolIssues:[...issues,{...iForm,id:uid(),litres:-Math.abs(parseFloat(iForm.litres)||0)}]});
@@ -802,7 +820,7 @@ function PetrolInventory({ loc, setLoc, fleet }) {
       {tabState==="purchases"&&(
         <>
           <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
-            <button className="btn btn-primary" onClick={()=>setShowPurchase(true)}>+ Log Purchase</button>
+            <button className="btn btn-primary" onClick={()=>{setPForm({...blankPForm,date:today()});setShowPurchase(true);}}>+ Log Purchase</button>
           </div>
           <div className="tbl-wrap"><table className="tbl">
             <thead><tr><th>Date</th><th className="num">Litres</th><th className="num">Price/L</th><th className="num">Total</th><th>Station</th><th>Notes</th><th></th></tr></thead>
@@ -887,6 +905,39 @@ function PetrolInventory({ loc, setLoc, fleet }) {
               </div>
             )}
             <div className="field"><label>Notes</label><input type="text" value={pForm.notes} onChange={e=>setPForm(f=>({...f,notes:e.target.value}))}/></div>
+
+            <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:7,padding:"12px 13px",marginBottom:14}}>
+              <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:pForm.issueNow?12:0}}>
+                <input type="checkbox" checked={pForm.issueNow}
+                  onChange={e=>setPForm(f=>({...f,issueNow:e.target.checked}))}
+                  style={{width:16,height:16,accentColor:T.gold,cursor:"pointer"}}/>
+                <span style={{fontSize:13,fontWeight:600,color:T.cream}}>Also fill up a vehicle with this now</span>
+              </label>
+              {pForm.issueNow&&(<>
+                <div className="grid2">
+                  <div className="field"><label>Vehicle</label>
+                    <select value={pForm.issueVehicle} onChange={e=>setPForm(f=>({...f,issueVehicle:e.target.value}))}>
+                      <option value="">— Select —</option>
+                      {petrolFleet.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="field"><label>Litres to Vehicle</label>
+                    <input type="number" placeholder={pForm.litres||"0"} value={pForm.issueLitres}
+                      onChange={e=>setPForm(f=>({...f,issueLitres:e.target.value}))}/>
+                  </div>
+                </div>
+                <div className="field" style={{marginBottom:0}}>
+                  <label>Mileage / Hours</label>
+                  <input type="text" value={pForm.issueMileage} onChange={e=>setPForm(f=>({...f,issueMileage:e.target.value}))}/>
+                </div>
+                {parseFloat(pForm.issueLitres)>parseFloat(pForm.litres||0) && (
+                  <div style={{fontSize:11,color:T.warn,marginTop:8}}>
+                    Note: more litres going to the vehicle than were purchased just now — that's fine if you're topping up from existing jerrycan stock too.
+                  </div>
+                )}
+              </>)}
+            </div>
+
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addPurchase}>Save</button><button className="btn btn-ghost" onClick={()=>setShowPurchase(false)}>Cancel</button></div>
           </div>
         </div>
