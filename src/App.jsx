@@ -1125,7 +1125,7 @@ function buildFleetAlerts(fleet, locData) {
 // else in this build. Runs once per full data load (from loadAll), not from
 // FleetAlerts, since that component renders on three different pages and
 // would otherwise trigger this repeatedly.
-async function syncServiceJobs(fleet, locData) {
+async function syncServiceJobs(fleet, locData, companyId) {
   const odo = latestOdometers(locData);
   const due = fleet.filter(v => {
     if (!v.self_serviced || !v.service_location_id) return false;
@@ -1138,13 +1138,16 @@ async function syncServiceJobs(fleet, locData) {
 
   try {
     // One query for every currently-open vehicle-linked job, rather than one per vehicle.
-    const openJobs = await sb.select("maint_jobs", "vehicle_id=not.is.null&status=in.(scheduled,in_progress)");
+    // maint_jobs is owned by the Maintenance app, not Ops — company_id was
+    // added to it in Maintenance's own 3a (2026-08-08), closing the gap
+    // Ops's 3a deliberately left open (see add_company_id_to_ops_tables.sql).
+    const openJobs = await sb.select("maint_jobs", `company_id=eq.${companyId}&vehicle_id=not.is.null&status=in.(scheduled,in_progress)`);
     const openByVehicle = new Set(openJobs.map(j => j.vehicle_id));
 
     for (const v of due) {
       if (openByVehicle.has(v.id)) { result[v.id] = { open:true }; continue; }
       const row = {
-        id: uid(), location_id: v.service_location_id, template_id: null, vehicle_id: v.id,
+        id: uid(), location_id: v.service_location_id, company_id: companyId, template_id: null, vehicle_id: v.id,
         name: `Service: ${v.name}`,
         description: "Auto-created from Operations — this vehicle is due for scheduled service. Add the parts/materials needed below.",
         job_type: "preventive", destination_id: null, dest_name: null,
@@ -2189,7 +2192,7 @@ function AuthenticatedApp() {
         service_interval_km: r.service_interval_km==null?null:+r.service_interval_km,
         license_expiry: r.license_expiry||"",
       }));
-      syncServiceJobs(fleetForSync, nd).then(setServiceJobs);
+      syncServiceJobs(fleetForSync, nd, companyId).then(setServiceJobs);
     } catch(e) {
       setLoadErr(e.message);
     } finally {
