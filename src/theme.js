@@ -157,20 +157,47 @@ export const css = `
     .bottom-nav{
       display:flex;position:fixed;bottom:0;left:0;right:0;
       background:${T.panel};border-top:1px solid ${T.border};
-      z-index:100;padding:0;padding-bottom:env(safe-area-inset-bottom);
+      z-index:100;padding:8px 12px;padding-bottom:calc(8px + env(safe-area-inset-bottom));
     }
-    .bn-item{
-      flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
-      padding:8px 2px;border:none;background:none;color:${T.muted};
-      font-family:'Inter',sans-serif;font-size:9px;font-weight:600;
-      letter-spacing:.04em;text-transform:uppercase;cursor:pointer;gap:3px;
-      transition:color .15s;min-height:56px;
+    /* Bottom nav is a single "Menu" button rather than a row of tabs — with
+       up to 7 tabs, a horizontal strip either clips items off the edge of
+       the screen or needs a swipe gesture nobody discovers on their own.
+       Tapping it opens a bottom sheet (.nav-sheet) listing every tab for
+       the current role, same grouping as the desktop sidebar. */
+    .nav-menu-btn{
+      width:100%;display:flex;align-items:center;justify-content:center;gap:8px;
+      padding:11px 14px;border-radius:10px;border:1px solid ${T.gold};
+      background:rgba(184,147,90,.12);color:${T.goldLt};
+      font-family:'Inter',sans-serif;font-weight:700;font-size:14px;cursor:pointer;
     }
-    .bn-item.active{color:${T.gold}}
-    .bn-icon{font-size:20px;line-height:1}
+    .nav-overlay{
+      position:fixed;inset:0;background:rgba(0,0,0,.55);
+      display:flex;align-items:flex-end;justify-content:center;z-index:200;
+    }
+    .nav-sheet{
+      width:100%;max-width:560px;max-height:75vh;overflow-y:auto;
+      background:${T.panel};border:1px solid ${T.border};border-bottom:none;
+      border-radius:16px 16px 0 0;
+    }
+    .nav-sheet-header{
+      display:flex;justify-content:space-between;align-items:center;padding:14px 16px;
+      border-bottom:1px solid ${T.border};position:sticky;top:0;background:${T.panel};
+    }
+    .nav-sheet-title{font-family:'Cormorant Garamond',serif;font-size:18px;font-weight:600;color:${T.goldLt}}
+    .nav-sheet-close{
+      padding:5px 12px;border-radius:8px;border:1px solid ${T.border};
+      background:transparent;color:${T.cream};font-family:'Inter',sans-serif;
+      font-size:13px;cursor:pointer;
+    }
+    .nav-sheet-item{
+      display:block;width:100%;text-align:left;padding:14px 16px;border:none;
+      border-bottom:1px solid ${T.border};background:none;color:${T.cream};
+      font-family:'Inter',sans-serif;font-weight:500;font-size:14px;cursor:pointer;
+    }
+    .nav-sheet-item.active{background:rgba(184,147,90,.12);color:${T.goldLt};font-weight:700}
 
     /* Main fills full screen minus top/bottom bars */
-    .main{padding-bottom:72px}
+    .main{padding-bottom:78px}
 
     /* Topbar compact */
     .topbar{padding:10px 14px;gap:8px}
@@ -230,5 +257,6 @@ export const css = `
   .mobile-loc-bar{display:none}
   @media (min-width: 769px) {
     .mobile-loc-bar{display:none !important}
+    .nav-overlay{display:none !important}
   }
 `;

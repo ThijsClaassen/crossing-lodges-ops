@@ -2117,6 +2117,7 @@ function AuthenticatedApp() {
 
   const [page,    setPage]    = useState("dashboard");
   const [locId,   setLocId]   = useState("ZC");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [fleet,   setFleet]   = useState([]);
   const [locData, setLocData] = useState({ ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() });
   const [loading, setLoading] = useState(true);
@@ -2280,21 +2281,6 @@ function AuthenticatedApp() {
     </>
   );
 
-  // Bottom nav pages (most used on mobile — keep to 5 max)
-  const BOTTOM_NAV = isAdmin
-    ? [
-        { id:"diesel",    label:"Diesel"   },
-        { id:"petrol",    label:"Petrol"   },
-        { id:"repairs",   label:"Repairs"  },
-        { id:"fleet",     label:"Fleet"    },
-        { id:"costs",     label:"Costs"    },
-      ]
-    : [
-        { id:"diesel",    label:"Diesel"   },
-        { id:"petrol",    label:"Petrol"   },
-        { id:"parts",     label:"Parts"    },
-        { id:"repairs",   label:"Repairs"  },
-      ];
 
   return (
     <>
@@ -2456,14 +2442,41 @@ function AuthenticatedApp() {
           </div>
         </div>
 
-        {/* ── MOBILE BOTTOM NAV ── */}
+        {/* ── MOBILE BOTTOM NAV ── a single Menu button rather than a row of
+            tabs, since a horizontal strip either clips tabs off the edge of
+            the screen or needs a swipe gesture nobody discovers on their
+            own. Tapping it opens a bottom sheet listing every tab for the
+            current role (same grouping as the desktop sidebar), so every
+            tab is always reachable regardless of how many exist. Desktop
+            keeps the sidebar as-is (this bar is hidden above 768px via CSS). */}
         <nav className="bottom-nav">
-          {BOTTOM_NAV.map(p=>(
-            <button key={p.id} className={`bn-item${page===p.id?" active":""}`} onClick={()=>setPage(p.id)}>
-              {p.label}
-            </button>
-          ))}
+          <button className="nav-menu-btn" onClick={()=>setMenuOpen(true)}>
+            <span>{current?.label || "Menu"}</span>
+            <span style={{fontSize:10,opacity:.7}}>&#9650;</span>
+          </button>
         </nav>
+
+        {menuOpen && (
+          <div className="nav-overlay" onClick={()=>setMenuOpen(false)}>
+            <div className="nav-sheet" onClick={e=>e.stopPropagation()}>
+              <div className="nav-sheet-header">
+                <span className="nav-sheet-title">Menu</span>
+                <button className="nav-sheet-close" onClick={()=>setMenuOpen(false)}>Close</button>
+              </div>
+              {sections.map(sec=>(
+                <div key={sec}>
+                  <div className="nav-section">{sec}</div>
+                  {visiblePages.filter(p=>p.section===sec).map(p=>(
+                    <button key={p.id} className={`nav-sheet-item${page===p.id?" active":""}`}
+                      onClick={()=>{setPage(p.id);setMenuOpen(false);}}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
