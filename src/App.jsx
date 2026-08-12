@@ -805,15 +805,38 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
 }
 
 // ─── PARTS & STOCK ───────────────────────────────────────────────────────────
-function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId }) {
+function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSlipAttached }) {
   const parts=loc.parts;
   const partIssues=loc.partIssues||[];
+  const partPurchases=loc.partPurchases||[];
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
   const [showIssue,setShowIssue]=useState(false);
+  const [showPurchase,setShowPurchase]=useState(false);
   const [issueBusy,setIssueBusy]=useState(false);
+  const [purchaseBusy,setPurchaseBusy]=useState(false);
   const [form,setForm]=useState({description:"",storeroom:"",shelf:"",location:"",unit:"each",openCost:"",openQty:"",purchaseQty:"",purchaseCost:"",purchaseFrom:"",closingQty:""});
   const [issueForm,setIssueForm]=useState({partId:"",vehicle:"",qty:"",date:today()});
+  const [purchaseForm,setPurchaseForm]=useState({partId:"",qty:"",totalCost:"",supplier:"",date:today(),notes:"",slipId:null});
+
+  // Ongoing restocks (logged via Log Purchase below) aren't baked into the
+  // part row itself the way the original opening purchase is — summed here
+  // per part_id so valuation and the part list can fold them in.
+  const purchaseTotalsByPart = useMemo(()=>{
+    const m={};
+    partPurchases.forEach(pp=>{
+      if(!m[pp.partId]) m[pp.partId]={qty:0,cost:0};
+      m[pp.partId].qty += pp.qty||0;
+      m[pp.partId].cost += pp.totalCost||0;
+    });
+    return m;
+  },[partPurchases]);
+  const weightedCost = p => {
+    const extra = purchaseTotalsByPart[p.id] || {qty:0,cost:0};
+    const totalQty = (p.openQty||0)+(p.purchaseQty||0)+extra.qty;
+    const totalCost = (p.openCost||0)*(p.openQty||0)+(p.purchaseCost||0)+extra.cost;
+    return totalQty>0 ? totalCost/totalQty : (p.openCost||0);
+  };
 
   const addPart=()=>{
     const p={...form,id:uid(),openCost:parseFloat(form.openCost)||0,openQty:parseFloat(form.openQty)||0,purchaseQty:parseFloat(form.purchaseQty)||0,purchaseCost:parseFloat(form.purchaseCost)||0,closingQty:parseFloat(form.closingQty)||0,issues:{}};
@@ -863,11 +886,59 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId }) {
     }catch(e){ alert("Error: "+e.message); }
   };
 
-  const totalValue=parts.reduce((s,p)=>{
-    const w=p.openQty>0||p.purchaseQty>0?((p.openCost*p.openQty)+p.purchaseCost)/Math.max(1,p.openQty+p.purchaseQty):p.openCost;
-    return s+(p.closingQty||0)*w;
-  },0);
+  // Logs a restock of an existing part — same "direct write, patch
+  // closing_qty in place" pattern as issuePart above, just adding instead
+  // of subtracting. The photo (if any) is uploaded by ScanSlipButton/
+  // AttachSlipButton before this runs; purchaseForm.slipId just carries the
+  // id through.
+  const logPurchase=async()=>{
+    const qty = parseFloat(purchaseForm.qty)||0;
+    if (!purchaseForm.partId || qty<=0) return;
+    setPurchaseBusy(true);
+    try{
+      const part = parts.find(p=>p.id===purchaseForm.partId);
+      const newClosingQty = (part?.closingQty||0)+qty;
+      const row = {id:uid(), location_id:locId, company_id:companyId, part_id:purchaseForm.partId, date:purchaseForm.date, qty, total_cost:parseFloat(purchaseForm.totalCost)||0, supplier:purchaseForm.supplier||null, notes:purchaseForm.notes||null, slip_id:purchaseForm.slipId||null};
+
+      await sb.insert("parts_purchases", row);
+      await sb.patch("parts", purchaseForm.partId, {closing_qty:newClosingQty});
+
+      upd({
+        parts: parts.map(p=>p.id===purchaseForm.partId?{...p,closingQty:newClosingQty}:p),
+        partPurchases: [...partPurchases, {id:row.id,date:row.date,partId:row.part_id,qty:row.qty,totalCost:row.total_cost,supplier:row.supplier||"",notes:row.notes||"",slipId:row.slip_id}],
+      });
+      setPurchaseForm({partId:"",qty:"",totalCost:"",supplier:"",date:today(),notes:"",slipId:null});
+      setShowPurchase(false);
+    }catch(e){ alert("Could not log purchase: "+e.message); }
+    finally{ setPurchaseBusy(false); }
+  };
+
+  // Same "undo" convention as deleteIssue — removing a purchase record
+  // takes its quantity back out of closing stock.
+  const deletePartPurchase=async(pp)=>{
+    if(!window.confirm("Delete this purchase record? The quantity will be removed from closing stock."))return;
+    try{
+      const part = parts.find(p=>p.id===pp.partId);
+      const reducedQty = Math.max(0,(part?.closingQty||0)-pp.qty);
+      await sb.delete("parts_purchases", pp.id);
+      if(part) await sb.patch("parts", part.id, {closing_qty:reducedQty});
+      upd({
+        parts: parts.map(p=>p.id===pp.partId?{...p,closingQty:reducedQty}:p),
+        partPurchases: partPurchases.filter(x=>x.id!==pp.id),
+      });
+    }catch(e){ alert("Error: "+e.message); }
+  };
+
+  const totalValue=parts.reduce((s,p)=>s+(p.closingQty||0)*weightedCost(p),0);
   const totalPurchases=parts.reduce((s,p)=>s+(p.purchaseCost||0),0);
+  const totalLoggedPurchases=partPurchases.reduce((s,pp)=>s+(pp.totalCost||0),0);
+
+  const recentPurchases = useMemo(()=>{
+    return [...partPurchases].sort((a,b)=>{
+      const da=parseDMY(a.date), db=parseDMY(b.date);
+      return (db?db.getTime():0)-(da?da.getTime():0);
+    }).slice(0,25);
+  },[partPurchases]);
 
   const recentIssues = useMemo(()=>{
     return [...partIssues].sort((a,b)=>{
@@ -877,24 +948,26 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId }) {
   },[partIssues]);
   const partName = id => parts.find(p=>p.id===id)?.description || "(deleted part)";
   const vehicleName = id => (fleet||[]).find(v=>v.id===id)?.name || id || "—";
-  const partUnitCost = id => parts.find(p=>p.id===id)?.openCost || 0;
+  const partUnitCost = id => weightedCost(parts.find(p=>p.id===id)||{});
 
   return(
     <>
       <div className="strip">
         <div className="strip-item"><div className="strip-label">Closing Stock Value</div><div className="strip-val">{fmtR(totalValue)}</div></div>
-        <div className="strip-item"><div className="strip-label">Purchases This Month</div><div className="strip-val">{fmtR(totalPurchases)}</div></div>
+        <div className="strip-item"><div className="strip-label">Opening Purchases</div><div className="strip-val">{fmtR(totalPurchases)}</div></div>
+        <div className="strip-item"><div className="strip-label">Logged Purchases</div><div className="strip-val">{fmtR(totalLoggedPurchases)}</div></div>
         <div className="strip-item"><div className="strip-label">Line Items</div><div className="strip-val">{parts.length}</div></div>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          <button className="btn btn-ghost" onClick={()=>{setPurchaseForm({partId:"",qty:"",totalCost:"",supplier:"",date:today(),notes:"",slipId:null});setShowPurchase(true);}}>Log Purchase</button>
           <button className="btn btn-ghost" onClick={()=>{setIssueForm({partId:"",vehicle:"",qty:"",date:today()});setShowIssue(true);}}>Issue Part</button>
           <button className="btn btn-primary" onClick={()=>setShowForm(true)}>+ Add Part</button>
         </div>
       </div>
       <div className="tbl-wrap"><table className="tbl">
-        <thead><tr><th>Description</th><th>Location</th><th>Unit</th><th className="num">Open Qty</th><th className="num">Open Cost</th><th className="num">Purchased</th><th className="num">Purchase Cost</th><th>From</th><th className="num">Closing Qty</th><th className="num">Value</th><th></th></tr></thead>
+        <thead><tr><th>Description</th><th>Location</th><th>Unit</th><th className="num">Open Qty</th><th className="num">Open Cost</th><th className="num">Purchased</th><th className="num">Purchase Cost</th><th>From</th><th className="num">Closing Qty</th><th className="num">Avg Cost/Unit</th><th className="num">Value</th><th></th></tr></thead>
         <tbody>
           {parts.map(p=>{
-            const w=p.openQty>0||p.purchaseQty>0?((p.openCost*p.openQty)+p.purchaseCost)/Math.max(1,p.openQty+p.purchaseQty):p.openCost;
+            const w=weightedCost(p);
             return(
               <tr key={p.id}>
                 <td style={{fontWeight:600}}>{p.description}</td>
@@ -906,14 +979,44 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId }) {
                 <td className="num">{fmtR(p.purchaseCost)}</td>
                 <td style={{fontSize:12,color:T.muted}}>{p.purchaseFrom}</td>
                 <td className="num">{p.closingQty}</td>
+                <td className="num" style={{color:T.muted,fontSize:12}}>{fmtR(w)}</td>
                 <td className="num">{fmtR((p.closingQty||0)*w)}</td>
                 <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({parts:parts.filter(x=>x.id!==p.id)})}>x</button>}</td>
               </tr>
             );
           })}
-          {parts.length===0&&<tr><td colSpan={11} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No parts recorded at this location</td></tr>}
+          {parts.length===0&&<tr><td colSpan={12} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No parts recorded at this location</td></tr>}
         </tbody>
       </table></div>
+
+      {partPurchases.length>0 && (
+        <div style={{marginTop:22}}>
+          <div className="section-title">Recent Purchases</div>
+          <div className="tbl-wrap"><table className="tbl">
+            <thead><tr><th>Date</th><th>Part</th><th className="num">Qty</th><th className="num">Total Cost</th><th>Supplier</th><th>Slip</th><th></th></tr></thead>
+            <tbody>
+              {recentPurchases.map(pp=>(
+                <tr key={pp.id}>
+                  <td className="mono" style={{fontSize:11}}>{pp.date}</td>
+                  <td style={{fontWeight:600}}>{partName(pp.partId)}</td>
+                  <td className="num">{pp.qty}</td>
+                  <td className="num">{fmtR(pp.totalCost)}</td>
+                  <td style={{fontSize:12,color:T.muted}}>{pp.supplier||"—"}</td>
+                  <td>
+                    {pp.slipId && slips[pp.slipId] ? <ViewSlipLink storagePath={slips[pp.slipId].storage_path}/>
+                      : <AttachSlipButton companyId={companyId} locId={locId}
+                          onAttached={(slip)=>{onSlipAttached(slip); sb.patch("parts_purchases",pp.id,{slip_id:slip.id}).catch(e=>alert("Saved photo but could not link it: "+e.message)); upd({partPurchases:partPurchases.map(x=>x.id===pp.id?{...x,slipId:slip.id}:x)});}}/>}
+                  </td>
+                  <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>deletePartPurchase(pp)}>x</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+          {partPurchases.length>25 && (
+            <div style={{fontSize:11,color:T.muted,marginTop:6}}>Showing the 25 most recent of {partPurchases.length} purchases.</div>
+          )}
+        </div>
+      )}
 
       {partIssues.length>0 && (
         <div style={{marginTop:22}}>
@@ -987,6 +1090,43 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId }) {
             <div className="field"><label>Date</label><DateField value={issueForm.date} onChange={v=>setIssueForm(f=>({...f,date:v}))}/></div>
             <div className="field"><label>Quantity</label><input type="number" min="0" value={issueForm.qty} onChange={e=>setIssueForm(f=>({...f,qty:e.target.value}))}/></div>
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={issuePart} disabled={issueBusy}>{issueBusy?"Issuing...":"Issue Part"}</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)} disabled={issueBusy}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+      {showPurchase&&(
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowPurchase(false)}>
+          <div className="modal" style={{maxWidth:460}}>
+            <div className="modal-title">Log <span>Part Purchase</span></div>
+            <ScanSlipButton companyId={companyId} locId={locId} onResult={({slipId,ocr})=>{
+              const li = ocr?.line_items?.[0];
+              setPurchaseForm(f=>({
+                ...f, slipId,
+                date: ocr?.date_guess ? fromISO(ocr.date_guess) : f.date,
+                supplier: ocr?.supplier_guess || f.supplier,
+                qty: li?.qty!=null ? String(li.qty) : f.qty,
+                totalCost: li?.total_price!=null ? String(round2(li.total_price)) : (ocr?.slip_total!=null ? String(ocr.slip_total) : f.totalCost),
+              }));
+            }}/>
+            <div className="field"><label>Part</label>
+              <select value={purchaseForm.partId} onChange={e=>setPurchaseForm(f=>({...f,partId:e.target.value}))}>
+                <option value="">— Select part —</option>
+                {parts.map(p=><option key={p.id} value={p.id}>{p.description} ({p.closingQty} {p.unit} in stock)</option>)}
+              </select>
+            </div>
+            <div className="grid2">
+              <div className="field"><label>Date</label><DateField value={purchaseForm.date} onChange={v=>setPurchaseForm(f=>({...f,date:v}))}/></div>
+              <div className="field"><label>Quantity</label><input type="number" min="0" value={purchaseForm.qty} onChange={e=>setPurchaseForm(f=>({...f,qty:e.target.value}))}/></div>
+              <div className="field"><label>Total Cost (R excl VAT)</label><input type="number" step="0.01" value={purchaseForm.totalCost} onChange={e=>setPurchaseForm(f=>({...f,totalCost:e.target.value}))}/></div>
+              <div className="field"><label>Supplier</label><input type="text" value={purchaseForm.supplier} onChange={e=>setPurchaseForm(f=>({...f,supplier:e.target.value}))}/></div>
+            </div>
+            {purchaseForm.qty&&purchaseForm.totalCost&&(
+              <div className="info-box" style={{marginBottom:12}}>
+                <span style={{fontSize:11,color:T.muted}}>Cost per unit</span>
+                <strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR((parseFloat(purchaseForm.totalCost)||0)/(parseFloat(purchaseForm.qty)||1))}</strong>
+              </div>
+            )}
+            <div className="field"><label>Notes</label><input type="text" value={purchaseForm.notes} onChange={e=>setPurchaseForm(f=>({...f,notes:e.target.value}))}/></div>
+            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={logPurchase} disabled={purchaseBusy}>{purchaseBusy?"Saving...":"Log Purchase"}</button><button className="btn btn-ghost" onClick={()=>setShowPurchase(false)} disabled={purchaseBusy}>Cancel</button></div>
           </div>
         </div>
       )}
@@ -2109,7 +2249,7 @@ const PAGES = [
 const emptyLoc = () => ({
   dieselDeliveries:[], dieselIssues:[], dieselDips:[], dieselOpening:0,
   petrolPurchases:[], petrolIssues:[], petrolOpening:0,
-  parts:[], partIssues:[], repairs:[],
+  parts:[], partIssues:[], partPurchases:[], repairs:[],
 });
 
 // ─── SUPABASE SYNC ────────────────────────────────────────────────────────────
@@ -2289,7 +2429,7 @@ function AuthenticatedApp() {
     setLoading(true); setLoadErr(null);
     try {
       const cf = `company_id=eq.${companyId}`;
-      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,repRows,slipRows] = await Promise.all([
+      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows] = await Promise.all([
         sb.select("fleet", cf),
         sb.select("diesel_deliveries", cf),
         sb.select("diesel_issues", cf),
@@ -2300,6 +2440,7 @@ function AuthenticatedApp() {
         sb.select("petrol_opening", cf),
         sb.select("parts", cf),
         sb.select("parts_issues", cf),
+        sb.select("parts_purchases", cf),
         sb.select("repairs", cf),
         sb.select("purchase_slips", `app=eq.ops&${cf}`),
       ]);
@@ -2329,6 +2470,7 @@ function AuthenticatedApp() {
         nd[lid].petrolOpening    = +(pOpen.find(r=>r.location_id===lid)?.litres||0);
         nd[lid].parts            = partsRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,description:r.description,storeroom:r.storeroom||"",shelf:r.shelf||"",location:r.position||"",unit:r.unit||"each",openCost:+r.open_cost,openQty:+r.open_qty,purchaseQty:+r.purchase_qty,purchaseCost:+r.purchase_cost,purchaseFrom:r.purchase_from||"",closingQty:+r.closing_qty,issues:r.issues||{}}));
         nd[lid].partIssues       = partIssRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date||"",partId:r.part_id,vehicle:r.vehicle_id||"",qty:+r.qty,notes:r.notes||""}));
+        nd[lid].partPurchases    = partPurchRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,partId:r.part_id,qty:+r.qty,totalCost:+r.total_cost,supplier:r.supplier||"",notes:r.notes||"",slipId:r.slip_id||null}));
         nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||"",slipId:r.slip_id||null}));
       });
       setLocData(nd);
@@ -2579,7 +2721,7 @@ function AuthenticatedApp() {
             {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData} serviceJobs={serviceJobs}/>}
             {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
-            {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId}/>}
+            {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData} serviceJobs={serviceJobs} companyId={companyId}/>}
             {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet} serviceJobs={serviceJobs}/>}
