@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { sb, LOCATIONS, LOC_COLORS } from "./sb.js";
 import { supabase } from "./supabaseClient.js";
 import { T, css } from "./theme.js";
@@ -6,11 +6,13 @@ import { LOGO_DATA } from "./logo.js";
 import Login from "./Login.jsx";
 import SetPassword from "./SetPassword.jsx";
 import { CompanyProvider, useCompany } from "./CompanyContext.jsx";
+import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const fmtR = n => `R ${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtL = n => `${Number(n).toLocaleString()} L`;
 const uid   = () => crypto.randomUUID();
+const round2 = n => Math.round((Number(n)||0)*100)/100;
 
 // Date helpers — app stores DD/MM/YYYY, HTML date input needs YYYY-MM-DD
 const toISO   = (dmy) => {
@@ -30,6 +32,98 @@ const today = () => {
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
 };
+
+// ─── SLIP SCANNING / ATTACHING (2026-08-12) ─────────────────────────────────
+// Shrinks a photo before it's sent anywhere — keeps requests well under
+// Vercel's serverless body-size limit and speeds up the AI read, without
+// losing the legibility a slip actually needs.
+async function resizeImageFile(file, maxDim=1800, quality=0.85) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim/Math.max(bitmap.width, bitmap.height));
+  const w = Math.round(bitmap.width*scale), h = Math.round(bitmap.height*scale);
+  const canvas = document.createElement("canvas");
+  canvas.width=w; canvas.height=h;
+  canvas.getContext("2d").drawImage(bitmap,0,0,w,h);
+  return new Promise(resolve=>canvas.toBlob(blob=>resolve(blob),"image/jpeg",quality));
+}
+function blobToBase64(blob) {
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(String(reader.result).split(",")[1]||"");
+    reader.onerror=reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// One button used across Diesel Deliveries, Petrol Purchases, and Repairs —
+// deliberately does both jobs at once rather than offering separate "scan"
+// and "manually attach" buttons: the photo is uploaded and linked (the part
+// that actually matters for the 7-year compliance record) BEFORE the OCR
+// read is even attempted, so a slip the AI can't read still gets saved —
+// the person just fills in the fields by hand instead of them being
+// pre-filled. onResult({slipId, ocr}) — ocr is null if the read failed.
+function ScanSlipButton({ companyId, locId, onResult, label="Scan / attach slip" }) {
+  const [busy,setBusy]=useState(false);
+  const [note,setNote]=useState("");
+  const fileRef=useRef(null);
+  const handleFile=async e=>{
+    const file=e.target.files?.[0]; e.target.value="";
+    if(!file)return;
+    setNote(""); setBusy(true);
+    try{
+      const resized=await resizeImageFile(file);
+      const slip = await uploadPurchaseSlip({companyId, locationId:locId, blob:resized});
+      let ocr=null;
+      try{
+        const base64=await blobToBase64(resized);
+        const res=await fetch("/api/parse-slip",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:base64,media_type:"image/jpeg"})});
+        const data=await res.json();
+        if(res.ok) ocr=data;
+      }catch{ /* OCR failed — the photo is already saved either way */ }
+      onResult({ slipId: slip.id, ocr });
+      setNote(ocr ? "Slip photo saved and read — check the fields below." : "Slip photo saved. Could not read it automatically — enter the details below by hand.");
+    }catch(err){ setNote("Could not save the slip photo: "+err.message); }
+    finally{ setBusy(false); }
+  };
+  return (
+    <div style={{marginBottom:12}}>
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleFile}/>
+      <button type="button" className="btn btn-ghost btn-sm" onClick={()=>fileRef.current?.click()} disabled={busy}>{busy?"Reading slip…":label}</button>
+      {note && <div style={{fontSize:11,color:T.muted,marginTop:5}}>{note}</div>}
+    </div>
+  );
+}
+
+function ViewSlipLink({ storagePath }) {
+  const [loading,setLoading]=useState(false);
+  const open=async()=>{
+    setLoading(true);
+    try{ const url=await getSlipUrl(storagePath); window.open(url,"_blank","noopener"); }
+    catch(err){ alert("Could not open the slip: "+err.message); }
+    finally{ setLoading(false); }
+  };
+  return <button className="btn btn-ghost btn-sm" onClick={open} disabled={loading}>{loading?"…":"View slip"}</button>;
+}
+
+function AttachSlipButton({ companyId, locId, onAttached, label="Attach slip" }) {
+  const [uploading,setUploading]=useState(false);
+  const fileRef=useRef(null);
+  const handleFile=async e=>{
+    const file=e.target.files?.[0]; e.target.value="";
+    if(!file)return;
+    setUploading(true);
+    try{
+      const resized=await resizeImageFile(file);
+      const slip=await uploadPurchaseSlip({companyId, locationId:locId, blob:resized});
+      onAttached(slip);
+    }catch(err){ alert("Could not attach the slip: "+err.message); }
+    finally{ setUploading(false); }
+  };
+  return (<>
+    <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handleFile}/>
+    <button type="button" className="btn btn-ghost btn-sm" onClick={()=>fileRef.current?.click()} disabled={uploading}>{uploading?"Uploading…":label}</button>
+  </>);
+}
 
 // ─── SHARED SMALL COMPONENTS ─────────────────────────────────────────────────
 // ─── DATE FIELD ───────────────────────────────────────────────────────────────
@@ -153,12 +247,12 @@ function Dashboard({ locId, loc, fleet, locData, serviceJobs }) {
 }
 
 // ─── DIESEL INVENTORY ────────────────────────────────────────────────────────
-function DieselInventory({ locId, loc, setLoc, fleet, isAdmin }) {
+function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips, onSlipAttached }) {
   const [tab, setTab]             = useState("issues");
   const [showDelivery, setShowDelivery] = useState(false);
   const [showIssue,    setShowIssue]    = useState(false);
   const [showDip,      setShowDip]      = useState(false);
-  const [dForm, setDForm] = useState({date:today(),litres:"",pricePerLitre:"",supplier:"",invoiceNo:"",notes:""});
+  const [dForm, setDForm] = useState({date:today(),litres:"",pricePerLitre:"",supplier:"",invoiceNo:"",notes:"",slipId:null});
   const [iForm, setIForm] = useState({date:today(),open:"",close:"",litres:"",vehicle:"",mileage:"",notes:""});
   const [dipForm,setDipForm]=useState({date:today(),litres:"",notes:""});
 
@@ -184,7 +278,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin }) {
 
   const addDelivery=()=>{
     upd({dieselDeliveries:[...deliveries,{...dForm,id:uid(),litres:parseFloat(dForm.litres)||0,pricePerLitre:parseFloat(dForm.pricePerLitre)||0}]});
-    setDForm({date:today(),litres:"",pricePerLitre:"",supplier:"",invoiceNo:"",notes:""});setShowDelivery(false);
+    setDForm({date:today(),litres:"",pricePerLitre:"",supplier:"",invoiceNo:"",notes:"",slipId:null});setShowDelivery(false);
   };
   const addIssue=()=>{
     const lit=parseFloat(iForm.litres)||((parseFloat(iForm.close)||0)-(parseFloat(iForm.open)||0));
@@ -265,7 +359,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin }) {
             <button className="btn btn-primary" onClick={()=>setShowDelivery(true)}>+ Log Delivery</button>
           </div>
           <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>Date</th><th className="num">Litres</th><th className="num">Price/L</th><th className="num">Total</th><th>Supplier</th><th>Invoice</th><th>Notes</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th className="num">Litres</th><th className="num">Price/L</th><th className="num">Total</th><th>Supplier</th><th>Invoice</th><th>Notes</th><th>Slip</th><th></th></tr></thead>
             <tbody>
               {deliveries.map(d=>(
                 <tr key={d.id}>
@@ -276,10 +370,15 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin }) {
                   <td style={{fontSize:12}}>{d.supplier||<span style={{color:T.muted}}>—</span>}</td>
                   <td>{d.invoiceNo?<span className="badge badge-v">#{d.invoiceNo}</span>:<span style={{color:T.muted}}>—</span>}</td>
                   <td style={{fontSize:12,color:T.muted}}>{d.notes}</td>
+                  <td>
+                    {d.slipId && slips[d.slipId] ? <ViewSlipLink storagePath={slips[d.slipId].storage_path}/>
+                      : <AttachSlipButton companyId={companyId} locId={locId}
+                          onAttached={(slip)=>{onSlipAttached(slip); sb.patch("diesel_deliveries",d.id,{slip_id:slip.id}).catch(e=>alert("Saved photo but could not link it: "+e.message)); upd({dieselDeliveries:deliveries.map(x=>x.id===d.id?{...x,slipId:slip.id}:x)});}}/>}
+                  </td>
                   <td><button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDeliveries:deliveries.filter(x=>x.id!==d.id)})}>x</button></td>
                 </tr>
               ))}
-              {deliveries.length===0&&<tr><td colSpan={8} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No deliveries recorded yet</td></tr>}
+              {deliveries.length===0&&<tr><td colSpan={9} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No deliveries recorded yet</td></tr>}
             </tbody>
           </table></div>
           {deliveries.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(90,155,106,.08)",border:`1px solid rgba(90,155,106,.25)`,borderRadius:6,display:"flex",gap:24}}>
@@ -372,6 +471,18 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin }) {
         <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowDelivery(false)}>
           <div className="modal">
             <div className="modal-title">Log Bulk <span>Diesel Delivery</span></div>
+            <ScanSlipButton companyId={companyId} locId={locId} onResult={({slipId,ocr})=>{
+              const li = ocr?.line_items?.[0];
+              const litres = li?.qty!=null ? String(li.qty) : null;
+              const price = li?.unit_price!=null ? String(round2(li.unit_price)) : (li?.total_price!=null && li?.qty ? String(round2(li.total_price/li.qty)) : null);
+              setDForm(f=>({
+                ...f, slipId,
+                date: ocr?.date_guess ? fromISO(ocr.date_guess) : f.date,
+                supplier: ocr?.supplier_guess || f.supplier,
+                litres: litres!=null ? litres : f.litres,
+                pricePerLitre: price!=null ? price : f.pricePerLitre,
+              }));
+            }}/>
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={dForm.date} onChange={v=>setDForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Litres Delivered</label><input type="number" placeholder="e.g. 5000" value={dForm.litres} onChange={e=>setDForm(f=>({...f,litres:e.target.value}))}/></div>
@@ -437,12 +548,12 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin }) {
 }
 
 // ─── PETROL INVENTORY ────────────────────────────────────────────────────────
-function PetrolInventory({ loc, setLoc, fleet }) {
+function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAttached }) {
   const [tab,setTab]=[...useState("issues")];
   const [showPurchase,setShowPurchase]=useState(false);
   const [showIssue,setShowIssue]=useState(false);
   const [pForm,setPForm]=useState({date:today(),litres:"",pricePerLitre:"",station:"",notes:"",
-    issueNow:false,issueVehicle:"",issueLitres:"",issueMileage:""});
+    issueNow:false,issueVehicle:"",issueLitres:"",issueMileage:"",slipId:null});
   const [iForm,setIForm]=useState({date:today(),litres:"",vehicle:"",mileage:"",notes:""});
 
   const {petrolPurchases:purchases,petrolIssues:issues,petrolOpening:opening}=loc;
@@ -462,11 +573,11 @@ function PetrolInventory({ loc, setLoc, fleet }) {
   },[issues]);
 
   const blankPForm = {date:today(),litres:"",pricePerLitre:"",station:"",notes:"",
-    issueNow:false,issueVehicle:"",issueLitres:"",issueMileage:""};
+    issueNow:false,issueVehicle:"",issueLitres:"",issueMileage:"",slipId:null};
 
   const addPurchase=()=>{
     const purchaseRow = {date:pForm.date,litres:parseFloat(pForm.litres)||0,pricePerLitre:parseFloat(pForm.pricePerLitre)||0,
-      station:pForm.station,notes:pForm.notes,id:uid()};
+      station:pForm.station,notes:pForm.notes,id:uid(),slipId:pForm.slipId};
     const newPurchases = [...purchases,purchaseRow];
 
     let newIssues = issues;
@@ -533,7 +644,7 @@ function PetrolInventory({ loc, setLoc, fleet }) {
             <button className="btn btn-primary" onClick={()=>{setPForm({...blankPForm,date:today()});setShowPurchase(true);}}>+ Log Purchase</button>
           </div>
           <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>Date</th><th className="num">Litres</th><th className="num">Price/L</th><th className="num">Total</th><th>Station</th><th>Notes</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th className="num">Litres</th><th className="num">Price/L</th><th className="num">Total</th><th>Station</th><th>Notes</th><th>Slip</th><th></th></tr></thead>
             <tbody>
               {purchases.map(p=>(
                 <tr key={p.id}>
@@ -543,10 +654,15 @@ function PetrolInventory({ loc, setLoc, fleet }) {
                   <td className="num">{fmtR((p.litres||0)*(p.pricePerLitre||0))}</td>
                   <td style={{fontSize:12}}>{p.station||<span style={{color:T.muted}}>—</span>}</td>
                   <td style={{fontSize:12,color:T.muted}}>{p.notes}</td>
+                  <td>
+                    {p.slipId && slips[p.slipId] ? <ViewSlipLink storagePath={slips[p.slipId].storage_path}/>
+                      : <AttachSlipButton companyId={companyId} locId={locId}
+                          onAttached={(slip)=>{onSlipAttached(slip); sb.patch("petrol_purchases",p.id,{slip_id:slip.id}).catch(e=>alert("Saved photo but could not link it: "+e.message)); upd({petrolPurchases:purchases.map(x=>x.id===p.id?{...x,slipId:slip.id}:x)});}}/>}
+                  </td>
                   <td><button className="btn btn-danger btn-sm" onClick={()=>upd({petrolPurchases:purchases.filter(x=>x.id!==p.id)})}>x</button></td>
                 </tr>
               ))}
-              {purchases.length===0&&<tr><td colSpan={7} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No purchases yet</td></tr>}
+              {purchases.length===0&&<tr><td colSpan={8} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No purchases yet</td></tr>}
             </tbody>
           </table></div>
           {purchases.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(90,155,106,.08)",border:`1px solid rgba(90,155,106,.25)`,borderRadius:6,display:"flex",gap:24}}>
@@ -602,6 +718,18 @@ function PetrolInventory({ loc, setLoc, fleet }) {
         <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowPurchase(false)}>
           <div className="modal" style={{maxWidth:440}}>
             <div className="modal-title">Log <span>Petrol Purchase</span></div>
+            <ScanSlipButton companyId={companyId} locId={locId} onResult={({slipId,ocr})=>{
+              const li = ocr?.line_items?.[0];
+              const litres = li?.qty!=null ? String(li.qty) : null;
+              const price = li?.unit_price!=null ? String(round2(li.unit_price)) : (li?.total_price!=null && li?.qty ? String(round2(li.total_price/li.qty)) : null);
+              setPForm(f=>({
+                ...f, slipId,
+                date: ocr?.date_guess ? fromISO(ocr.date_guess) : f.date,
+                station: ocr?.supplier_guess || f.station,
+                litres: litres!=null ? litres : f.litres,
+                pricePerLitre: price!=null ? price : f.pricePerLitre,
+              }));
+            }}/>
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={pForm.date} onChange={v=>setPForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Litres</label><input type="number" value={pForm.litres} onChange={e=>setPForm(f=>({...f,litres:e.target.value}))}/></div>
@@ -867,8 +995,8 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId }) {
 }
 
 // ─── REPAIRS ─────────────────────────────────────────────────────────────────
-const BLANK_REPAIR = () => ({date:today(),vehicle:"",workshop:"",invoiceNo:"",description:"",labourCost:"",partsCost:"",otherCost:"",invoiceReceived:false,notes:""});
-function Repairs({ loc, setLoc, fleet, isAdmin }) {
+const BLANK_REPAIR = () => ({date:today(),vehicle:"",workshop:"",invoiceNo:"",description:"",labourCost:"",partsCost:"",otherCost:"",invoiceReceived:false,notes:"",slipId:null});
+function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipAttached }) {
   const repairs=loc.repairs;
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
@@ -916,7 +1044,7 @@ function Repairs({ loc, setLoc, fleet, isAdmin }) {
       )}
       <div className="section-title">All Repair Jobs</div>
       <div className="tbl-wrap"><table className="tbl">
-        <thead><tr><th>Date</th><th>Vehicle</th><th>Workshop</th><th>Description</th><th className="num">Labour</th><th className="num">Parts</th><th className="num">Total</th><th>Invoice</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Vehicle</th><th>Workshop</th><th>Description</th><th className="num">Labour</th><th className="num">Parts</th><th className="num">Total</th><th>Invoice</th><th>Slip</th><th></th></tr></thead>
         <tbody>
           {repairs.map(r=>(
             <tr key={r.id} style={{cursor:"pointer"}} onClick={()=>setViewEntry(r)}>
@@ -928,10 +1056,15 @@ function Repairs({ loc, setLoc, fleet, isAdmin }) {
               <td className="num">{parseFloat(r.partsCost)>0?fmtR(r.partsCost):<span style={{color:T.muted}}>—</span>}</td>
               <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.totalCost||0)}</td>
               <td>{r.invoiceNo?<span className="badge badge-v">#{r.invoiceNo}</span>:r.invoiceReceived?<span className="badge badge-d">Received</span>:<span className="badge" style={{background:"rgba(192,80,80,.15)",color:T.danger,border:"1px solid rgba(192,80,80,.3)"}}>Pending</span>}</td>
+              <td onClick={e=>e.stopPropagation()}>
+                {r.slipId && slips[r.slipId] ? <ViewSlipLink storagePath={slips[r.slipId].storage_path}/>
+                  : <AttachSlipButton companyId={companyId} locId={locId}
+                      onAttached={(slip)=>{onSlipAttached(slip); sb.patch("repairs",r.id,{slip_id:slip.id}).catch(e=>alert("Saved photo but could not link it: "+e.message)); upd({repairs:repairs.map(x=>x.id===r.id?{...x,slipId:slip.id}:x)});}}/>}
+              </td>
               <td onClick={e=>e.stopPropagation()}>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({repairs:repairs.filter(x=>x.id!==r.id)})}>x</button>}</td>
             </tr>
           ))}
-          {repairs.length===0&&<tr><td colSpan={9} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No repairs logged at this location</td></tr>}
+          {repairs.length===0&&<tr><td colSpan={10} className="empty"><div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>No repairs logged at this location</td></tr>}
         </tbody>
       </table></div>
       {viewEntry&&(
@@ -970,6 +1103,16 @@ function Repairs({ loc, setLoc, fleet, isAdmin }) {
         <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
           <div className="modal" style={{maxWidth:540}}>
             <div className="modal-title">Log <span>External Repair</span></div>
+            <ScanSlipButton companyId={companyId} locId={locId} onResult={({slipId,ocr})=>{
+              const hasCosts = (parseFloat(form.labourCost)||0)+(parseFloat(form.partsCost)||0)+(parseFloat(form.otherCost)||0) > 0;
+              setForm(f=>({
+                ...f, slipId,
+                date: ocr?.date_guess ? fromISO(ocr.date_guess) : f.date,
+                workshop: ocr?.supplier_guess || f.workshop,
+                otherCost: (!hasCosts && ocr?.slip_total!=null) ? String(ocr.slip_total) : f.otherCost,
+              }));
+            }}/>
+            {form.slipId && <div style={{fontSize:11,color:T.muted,marginBottom:10}}>If the invoice total was pre-filled into "Other", move it between Labour/Parts/Other as it's actually billed.</div>}
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Vehicle / Equipment</label>
@@ -1975,7 +2118,7 @@ async function syncLocChanges(locId, companyId, oldLoc, newLoc) {
   const removed = (o,n) => o.filter(x => !n.find(y=>y.id===x.id));
 
   for (const r of added(oldLoc.dieselDeliveries, newLoc.dieselDeliveries))
-    await sb.insert("diesel_deliveries",{id:r.id,location_id:locId,company_id:companyId,date:r.date,litres:r.litres,price_per_litre:r.pricePerLitre,supplier:r.supplier||null,invoice_no:r.invoiceNo||null,notes:r.notes||null});
+    await sb.insert("diesel_deliveries",{id:r.id,location_id:locId,company_id:companyId,date:r.date,litres:r.litres,price_per_litre:r.pricePerLitre,supplier:r.supplier||null,invoice_no:r.invoiceNo||null,notes:r.notes||null,slip_id:r.slipId||null});
   for (const r of removed(oldLoc.dieselDeliveries, newLoc.dieselDeliveries))
     await sb.delete("diesel_deliveries",r.id);
 
@@ -1993,7 +2136,7 @@ async function syncLocChanges(locId, companyId, oldLoc, newLoc) {
     await sb.upsert("diesel_opening",{location_id:locId,company_id:companyId,litres:newLoc.dieselOpening,updated_at:new Date().toISOString()},"location_id,company_id");
 
   for (const r of added(oldLoc.petrolPurchases, newLoc.petrolPurchases))
-    await sb.insert("petrol_purchases",{id:r.id,location_id:locId,company_id:companyId,date:r.date,litres:r.litres,price_per_litre:r.pricePerLitre,station:r.station||null,notes:r.notes||null});
+    await sb.insert("petrol_purchases",{id:r.id,location_id:locId,company_id:companyId,date:r.date,litres:r.litres,price_per_litre:r.pricePerLitre,station:r.station||null,notes:r.notes||null,slip_id:r.slipId||null});
   for (const r of removed(oldLoc.petrolPurchases, newLoc.petrolPurchases))
     await sb.delete("petrol_purchases",r.id);
 
@@ -2011,7 +2154,7 @@ async function syncLocChanges(locId, companyId, oldLoc, newLoc) {
     await sb.delete("parts",r.id);
 
   for (const r of added(oldLoc.repairs, newLoc.repairs))
-    await sb.insert("repairs",{id:r.id,location_id:locId,company_id:companyId,date:r.date,vehicle_id:r.vehicle||null,workshop:r.workshop||null,invoice_no:r.invoiceNo||null,description:r.description||null,labour_cost:r.labourCost||0,parts_cost:r.partsCost||0,other_cost:r.otherCost||0,total_cost:r.totalCost||0,invoice_received:r.invoiceReceived||false,notes:r.notes||null});
+    await sb.insert("repairs",{id:r.id,location_id:locId,company_id:companyId,date:r.date,vehicle_id:r.vehicle||null,workshop:r.workshop||null,invoice_no:r.invoiceNo||null,description:r.description||null,labour_cost:r.labourCost||0,parts_cost:r.partsCost||0,other_cost:r.otherCost||0,total_cost:r.totalCost||0,invoice_received:r.invoiceReceived||false,notes:r.notes||null,slip_id:r.slipId||null});
   for (const r of removed(oldLoc.repairs, newLoc.repairs))
     await sb.delete("repairs",r.id);
 }
@@ -2123,6 +2266,10 @@ function AuthenticatedApp() {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState(null);
   const [serviceJobs, setServiceJobs] = useState({});
+  // Purchase slip photos (2026-08-12) — keyed by purchase_slips.id, loaded
+  // company-wide for the "View slip" links and the manual Attach flow.
+  const [slips, setSlips] = useState({});
+  const onSlipAttached = (slip) => { if (slip) setSlips(s => ({...s, [slip.id]: slip})); };
 
   const [locPickerOpen, setLocPickerOpen] = useState(false);
 
@@ -2142,7 +2289,7 @@ function AuthenticatedApp() {
     setLoading(true); setLoadErr(null);
     try {
       const cf = `company_id=eq.${companyId}`;
-      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,repRows] = await Promise.all([
+      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,repRows,slipRows] = await Promise.all([
         sb.select("fleet", cf),
         sb.select("diesel_deliveries", cf),
         sb.select("diesel_issues", cf),
@@ -2154,7 +2301,10 @@ function AuthenticatedApp() {
         sb.select("parts", cf),
         sb.select("parts_issues", cf),
         sb.select("repairs", cf),
+        sb.select("purchase_slips", `app=eq.ops&${cf}`),
       ]);
+      const slipMap={}; (slipRows||[]).forEach(s=>{slipMap[s.id]=s;});
+      setSlips(slipMap);
 
       setFleet(fleetRows.map(r=>({
         id:r.id, name:r.name, category:r.category, fuel:r.fuel,
@@ -2170,16 +2320,16 @@ function AuthenticatedApp() {
       const nd = { ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() };
       LOCATIONS.forEach(l => {
         const lid = l.id;
-        nd[lid].dieselDeliveries = dDel.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,pricePerLitre:+r.price_per_litre,supplier:r.supplier||"",invoiceNo:r.invoice_no||"",notes:r.notes||""}));
+        nd[lid].dieselDeliveries = dDel.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,pricePerLitre:+r.price_per_litre,supplier:r.supplier||"",invoiceNo:r.invoice_no||"",notes:r.notes||"",slipId:r.slip_id||null}));
         nd[lid].dieselIssues     = dIss.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,open:+r.open_meter,close:+r.close_meter,litres:+r.litres,vehicle:r.vehicle_id||"",mileage:r.mileage||"",notes:r.notes||""}));
         nd[lid].dieselDips       = dDips.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,notes:r.notes||""}));
         nd[lid].dieselOpening    = +(dOpen.find(r=>r.location_id===lid)?.litres||0);
-        nd[lid].petrolPurchases  = pPurch.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,pricePerLitre:+r.price_per_litre,station:r.station||"",notes:r.notes||""}));
+        nd[lid].petrolPurchases  = pPurch.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,pricePerLitre:+r.price_per_litre,station:r.station||"",notes:r.notes||"",slipId:r.slip_id||null}));
         nd[lid].petrolIssues     = pIss.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,vehicle:r.vehicle_id||"",mileage:r.mileage||"",notes:r.notes||""}));
         nd[lid].petrolOpening    = +(pOpen.find(r=>r.location_id===lid)?.litres||0);
         nd[lid].parts            = partsRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,description:r.description,storeroom:r.storeroom||"",shelf:r.shelf||"",location:r.position||"",unit:r.unit||"each",openCost:+r.open_cost,openQty:+r.open_qty,purchaseQty:+r.purchase_qty,purchaseCost:+r.purchase_cost,purchaseFrom:r.purchase_from||"",closingQty:+r.closing_qty,issues:r.issues||{}}));
         nd[lid].partIssues       = partIssRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date||"",partId:r.part_id,vehicle:r.vehicle_id||"",qty:+r.qty,notes:r.notes||""}));
-        nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||""}));
+        nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||"",slipId:r.slip_id||null}));
       });
       setLocData(nd);
 
@@ -2427,10 +2577,10 @@ function AuthenticatedApp() {
 
           <div className="section">
             {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData} serviceJobs={serviceJobs}/>}
-            {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
-            {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet}/>}
+            {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
+            {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId}/>}
-            {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin}/>}
+            {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData} serviceJobs={serviceJobs} companyId={companyId}/>}
             {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet} serviceJobs={serviceJobs}/>}
             {!isAdmin && (page==="dashboard"||page==="fleet"||page==="costs") && (

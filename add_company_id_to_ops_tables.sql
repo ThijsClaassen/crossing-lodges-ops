@@ -129,10 +129,34 @@ alter table repairs drop constraint if exists repairs_location_id_check;
 -- waiting to happen. Drop the single-column uniqueness, add a compound one.
 
 alter table diesel_opening drop constraint if exists diesel_opening_location_id_key;
-alter table diesel_opening add constraint diesel_opening_location_company_key unique (location_id, company_id);
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'diesel_opening_location_company_key') then
+    alter table diesel_opening add constraint diesel_opening_location_company_key unique (location_id, company_id);
+  end if;
+end $$;
 
 alter table petrol_opening drop constraint if exists petrol_opening_location_id_key;
-alter table petrol_opening add constraint petrol_opening_location_company_key unique (location_id, company_id);
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'petrol_opening_location_company_key') then
+    alter table petrol_opening add constraint petrol_opening_location_company_key unique (location_id, company_id);
+  end if;
+end $$;
+
+-- 7. Fix above: location_id was actually the PRIMARY KEY, not a plain unique
+-- constraint named "..._location_id_key" — so step 6 silently dropped nothing
+-- and the real single-column primary key was still blocking a second company
+-- from ever using "ZC"/"EC"/"SC" (hit 2026-08-09 seeding Demo's diesel_opening).
+-- Replace the single-column pkey with a compound one; the separate unique
+-- constraint from step 6 becomes redundant once the pkey covers the same
+-- columns, so drop it too.
+
+alter table diesel_opening drop constraint if exists diesel_opening_pkey;
+alter table diesel_opening drop constraint if exists diesel_opening_location_company_key;
+alter table diesel_opening add constraint diesel_opening_pkey primary key (location_id, company_id);
+
+alter table petrol_opening drop constraint if exists petrol_opening_pkey;
+alter table petrol_opening drop constraint if exists petrol_opening_location_company_key;
+alter table petrol_opening add constraint petrol_opening_pkey primary key (location_id, company_id);
 
 -- =========================================================================
 -- VERIFICATION — run this and check "total" equals "with_company" on every
