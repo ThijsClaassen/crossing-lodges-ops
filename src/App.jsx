@@ -810,15 +810,19 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
   const parts=loc.parts;
   const partIssues=loc.partIssues||[];
   const partPurchases=loc.partPurchases||[];
+  const partCreditNotes=loc.partCreditNotes||[];
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
   const [showIssue,setShowIssue]=useState(false);
   const [showPurchase,setShowPurchase]=useState(false);
+  const [showCredit,setShowCredit]=useState(false);
   const [issueBusy,setIssueBusy]=useState(false);
   const [purchaseBusy,setPurchaseBusy]=useState(false);
+  const [creditBusy,setCreditBusy]=useState(false);
   const [form,setForm]=useState({description:"",storeroom:"",shelf:"",location:"",unit:"each",openCost:"",openQty:"",purchaseQty:"",purchaseCost:"",purchaseFrom:"",closingQty:""});
   const [issueForm,setIssueForm]=useState({partId:"",vehicle:"",qty:"",date:today()});
   const [purchaseForm,setPurchaseForm]=useState({partId:"",qty:"",totalCost:"",supplier:"",date:today(),notes:"",slipId:null});
+  const [creditForm,setCreditForm]=useState({partId:"",qty:"",unitCost:"",supplier:"",reason:"wrong_item",creditNoteNumber:"",date:today(),notes:"",pendingSlipBlob:null,pendingSlipName:""});
 
   // Ongoing restocks (logged via Log Purchase below) aren't baked into the
   // part row itself the way the original opening purchase is — summed here
@@ -930,9 +934,75 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
     }catch(e){ alert("Error: "+e.message); }
   };
 
+  // Supplier Credit Notes (2026-08-25) — when the wrong part was bought and
+  // has to go back to the supplier. Same "direct write, patch closing_qty in
+  // place" pattern as issuePart, decrementing stock the same way — but
+  // parts_issues requires a vehicle_id (every part issue here is issued to
+  // a vehicle/equipment) which doesn't fit a supplier return, so this skips
+  // parts_issues entirely and only records the financial side in the shared
+  // supplier_credit_notes table (issue_id left null there).
+  const pickCreditSlipFile=async e=>{
+    const file=e.target.files?.[0]; e.target.value="";
+    if(!file)return;
+    const resized=await resizeImageFile(file);
+    setCreditForm(f=>({...f,pendingSlipBlob:resized,pendingSlipName:file.name}));
+  };
+  const logCredit=async()=>{
+    const qty = parseFloat(creditForm.qty)||0;
+    const unitCost = parseFloat(creditForm.unitCost)||0;
+    if (!creditForm.partId || qty<=0 || !creditForm.supplier) return;
+    setCreditBusy(true);
+    try{
+      const part = parts.find(p=>p.id===creditForm.partId);
+      const newClosingQty = Math.max(0,(part?.closingQty||0)-qty);
+      const totalCredit = round2(qty*unitCost);
+
+      let slipId=null;
+      if(creditForm.pendingSlipBlob){
+        const slip=await uploadPurchaseSlip({companyId, locationId:locId, blob:creditForm.pendingSlipBlob});
+        slipId=slip.id;
+        onSlipAttached(slip);
+      }
+
+      const row = {id:uid(), company_id:companyId, app:"ops", location_id:locId, period:null,
+        item_id:creditForm.partId, item_description:part?.description||"", issue_id:null,
+        qty, unit_cost:unitCost, total_credit:totalCredit, supplier:creditForm.supplier,
+        reason:creditForm.reason, credit_note_number:creditForm.creditNoteNumber||null,
+        date:toISO(creditForm.date), notes:creditForm.notes||null, slip_id:slipId};
+
+      await sb.insert("supplier_credit_notes", row);
+      await sb.patch("parts", creditForm.partId, {closing_qty:newClosingQty});
+
+      upd({
+        parts: parts.map(p=>p.id===creditForm.partId?{...p,closingQty:newClosingQty}:p),
+        partCreditNotes: [...partCreditNotes, {id:row.id,date:creditForm.date,partId:row.item_id,itemDescription:row.item_description,qty,unitCost,totalCredit,supplier:row.supplier,reason:row.reason,creditNoteNumber:row.credit_note_number||"",notes:row.notes||"",slipId:row.slip_id}],
+      });
+      setCreditForm({partId:"",qty:"",unitCost:"",supplier:"",reason:"wrong_item",creditNoteNumber:"",date:today(),notes:"",pendingSlipBlob:null,pendingSlipName:""});
+      setShowCredit(false);
+    }catch(e){ alert("Could not log credit note: "+e.message); }
+    finally{ setCreditBusy(false); }
+  };
+
+  // Same "undo" convention as deleteIssue/deletePartPurchase — deleting a
+  // credit note reverses the stock deduction it caused.
+  const deletePartCreditNote=async(c)=>{
+    if(!window.confirm("Delete this credit note? The quantity will be added back to closing stock."))return;
+    try{
+      const part = parts.find(p=>p.id===c.partId);
+      const restoredQty = (part?.closingQty||0)+c.qty;
+      await sb.delete("supplier_credit_notes", c.id);
+      await sb.patch("parts", c.partId, {closing_qty:restoredQty});
+      upd({
+        parts: parts.map(p=>p.id===c.partId?{...p,closingQty:restoredQty}:p),
+        partCreditNotes: partCreditNotes.filter(x=>x.id!==c.id),
+      });
+    }catch(e){ alert("Error: "+e.message); }
+  };
+
   const totalValue=parts.reduce((s,p)=>s+(p.closingQty||0)*weightedCost(p),0);
   const totalPurchases=parts.reduce((s,p)=>s+(p.purchaseCost||0),0);
   const totalLoggedPurchases=partPurchases.reduce((s,pp)=>s+(pp.totalCost||0),0);
+  const totalCredits=partCreditNotes.reduce((s,c)=>s+(c.totalCredit||0),0);
 
   const recentPurchases = useMemo(()=>{
     return [...partPurchases].sort((a,b)=>{
@@ -940,6 +1010,13 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
       return (db?db.getTime():0)-(da?da.getTime():0);
     }).slice(0,25);
   },[partPurchases]);
+
+  const recentCreditNotes = useMemo(()=>{
+    return [...partCreditNotes].sort((a,b)=>{
+      const da=parseDMY(a.date), db=parseDMY(b.date);
+      return (db?db.getTime():0)-(da?da.getTime():0);
+    }).slice(0,25);
+  },[partCreditNotes]);
 
   const recentIssues = useMemo(()=>{
     return [...partIssues].sort((a,b)=>{
@@ -960,6 +1037,7 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
         <div className="strip-item"><div className="strip-label">Line Items</div><div className="strip-val">{parts.length}</div></div>
         <div style={{marginLeft:"auto",display:"flex",gap:8}}>
           <button className="btn btn-ghost" onClick={()=>{setPurchaseForm({partId:"",qty:"",totalCost:"",supplier:"",date:today(),notes:"",slipId:null});setShowPurchase(true);}}>Log Purchase</button>
+          <button className="btn btn-ghost" onClick={()=>{setCreditForm({partId:"",qty:"",unitCost:"",supplier:"",reason:"wrong_item",creditNoteNumber:"",date:today(),notes:"",pendingSlipBlob:null,pendingSlipName:""});setShowCredit(true);}}>Credit Note</button>
           <button className="btn btn-ghost" onClick={()=>{setIssueForm({partId:"",vehicle:"",qty:"",date:today()});setShowIssue(true);}}>Issue Part</button>
           <button className="btn btn-primary" onClick={()=>setShowForm(true)}>+ Add Part</button>
         </div>
@@ -1015,6 +1093,37 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
           </table></div>
           {partPurchases.length>25 && (
             <div style={{fontSize:11,color:T.muted,marginTop:6}}>Showing the 25 most recent of {partPurchases.length} purchases.</div>
+          )}
+        </div>
+      )}
+
+      {partCreditNotes.length>0 && (
+        <div style={{marginTop:22}}>
+          <div className="section-title">Recent Credit Notes — {fmtR(totalCredits)} total</div>
+          <div className="tbl-wrap"><table className="tbl">
+            <thead><tr><th>Date</th><th>Part</th><th className="num">Qty</th><th className="num">Credit R</th><th>Supplier</th><th>Reason</th><th>Credit note #</th><th>Slip</th><th></th></tr></thead>
+            <tbody>
+              {recentCreditNotes.map(c=>(
+                <tr key={c.id}>
+                  <td className="mono" style={{fontSize:11}}>{c.date}</td>
+                  <td style={{fontWeight:600}}>{c.itemDescription||partName(c.partId)}</td>
+                  <td className="num">{c.qty}</td>
+                  <td className="num">{fmtR(c.totalCredit)}</td>
+                  <td style={{fontSize:12,color:T.muted}}>{c.supplier||"—"}</td>
+                  <td style={{fontSize:12,color:T.muted}}>{CREDIT_REASONS.find(r=>r.value===c.reason)?.label||c.reason}</td>
+                  <td style={{fontSize:12,color:T.muted}}>{c.creditNoteNumber||"—"}</td>
+                  <td>
+                    {c.slipId && slips[c.slipId] ? <ViewSlipLink storagePath={slips[c.slipId].storage_path}/>
+                      : <AttachSlipButton companyId={companyId} locId={locId}
+                          onAttached={(slip)=>{onSlipAttached(slip); sb.patch("supplier_credit_notes",c.id,{slip_id:slip.id}).catch(e=>alert("Saved photo but could not link it: "+e.message)); upd({partCreditNotes:partCreditNotes.map(x=>x.id===c.id?{...x,slipId:slip.id}:x)});}}/>}
+                  </td>
+                  <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>deletePartCreditNote(c)}>x</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+          {partCreditNotes.length>25 && (
+            <div style={{fontSize:11,color:T.muted,marginTop:6}}>Showing the 25 most recent of {partCreditNotes.length} credit notes.</div>
           )}
         </div>
       )}
@@ -1128,6 +1237,48 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
             )}
             <div className="field"><label>Notes</label><input type="text" value={purchaseForm.notes} onChange={e=>setPurchaseForm(f=>({...f,notes:e.target.value}))}/></div>
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={logPurchase} disabled={purchaseBusy}>{purchaseBusy?"Saving...":"Log Purchase"}</button><button className="btn btn-ghost" onClick={()=>setShowPurchase(false)} disabled={purchaseBusy}>Cancel</button></div>
+          </div>
+        </div>
+      )}
+      {showCredit&&(
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowCredit(false)}>
+          <div className="modal" style={{maxWidth:460}}>
+            <div className="modal-title">Log <span>Credit Note</span></div>
+            <div style={{fontSize:12,color:T.muted,marginBottom:12}}>
+              For when the wrong part was bought and has to go back to the supplier. This reduces
+              closing stock and records a credit against the supplier for Finance Dashboard to reconcile.
+            </div>
+            <div className="field"><label>Part</label>
+              <select value={creditForm.partId} onChange={e=>setCreditForm(f=>({...f,partId:e.target.value}))}>
+                <option value="">— Select part —</option>
+                {parts.map(p=><option key={p.id} value={p.id}>{p.description} ({p.closingQty} {p.unit} in stock)</option>)}
+              </select>
+            </div>
+            <div className="grid2">
+              <div className="field"><label>Date</label><DateField value={creditForm.date} onChange={v=>setCreditForm(f=>({...f,date:v}))}/></div>
+              <div className="field"><label>Qty returned</label><input type="number" min="0" value={creditForm.qty} onChange={e=>setCreditForm(f=>({...f,qty:e.target.value}))}/></div>
+              <div className="field"><label>Unit cost (R excl VAT)</label><input type="number" step="0.01" value={creditForm.unitCost} onChange={e=>setCreditForm(f=>({...f,unitCost:e.target.value}))}/></div>
+              <div className="field"><label>Supplier</label><input type="text" value={creditForm.supplier} onChange={e=>setCreditForm(f=>({...f,supplier:e.target.value}))}/></div>
+            </div>
+            <div className="field"><label>Reason</label>
+              <select value={creditForm.reason} onChange={e=>setCreditForm(f=>({...f,reason:e.target.value}))}>
+                {CREDIT_REASONS.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Credit note # (if known)</label><input type="text" value={creditForm.creditNoteNumber} onChange={e=>setCreditForm(f=>({...f,creditNoteNumber:e.target.value}))}/></div>
+            {creditForm.qty&&creditForm.unitCost&&(
+              <div className="info-box" style={{marginBottom:12}}>
+                <span style={{fontSize:11,color:T.muted}}>Total credit</span>
+                <strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR((parseFloat(creditForm.qty)||0)*(parseFloat(creditForm.unitCost)||0))}</strong>
+              </div>
+            )}
+            <div className="field"><label>Notes</label><input type="text" value={creditForm.notes} onChange={e=>setCreditForm(f=>({...f,notes:e.target.value}))}/></div>
+            <div className="field">
+              <label>Slip / credit note photo (optional)</label>
+              <input type="file" accept="image/*" capture="environment" onChange={pickCreditSlipFile}/>
+              {creditForm.pendingSlipName && <div style={{fontSize:11,color:T.ok,marginTop:4}}>Attached: {creditForm.pendingSlipName}</div>}
+            </div>
+            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={logCredit} disabled={creditBusy}>{creditBusy?"Saving...":"Log Credit Note"}</button><button className="btn btn-ghost" onClick={()=>setShowCredit(false)} disabled={creditBusy}>Cancel</button></div>
           </div>
         </div>
       )}
@@ -2247,10 +2398,23 @@ const PAGES = [
   { id:"costs",     label:"Cost Summary",  section:"Reports",    adminOnly:true  },
 ];
 
+// Supplier Credit Notes (2026-08-25) — when the wrong item was bought and
+// has to go back to the supplier. Reasons match the shared
+// supplier_credit_notes table's check constraint (see
+// add_supplier_credit_notes.sql) — keep in sync across all 5 apps.
+const CREDIT_REASONS = [
+  { value: "wrong_item", label: "Wrong item" },
+  { value: "damaged", label: "Damaged" },
+  { value: "short_delivery", label: "Short delivery" },
+  { value: "overcharged", label: "Overcharged" },
+  { value: "duplicate", label: "Duplicate" },
+  { value: "other", label: "Other" },
+];
+
 const emptyLoc = () => ({
   dieselDeliveries:[], dieselIssues:[], dieselDips:[], dieselOpening:0,
   petrolPurchases:[], petrolIssues:[], petrolOpening:0,
-  parts:[], partIssues:[], partPurchases:[], repairs:[],
+  parts:[], partIssues:[], partPurchases:[], repairs:[], partCreditNotes:[],
 });
 
 // ─── SUPABASE SYNC ────────────────────────────────────────────────────────────
@@ -2487,7 +2651,7 @@ function AuthenticatedApp() {
     setLoading(true); setLoadErr(null);
     try {
       const cf = `company_id=eq.${companyId}`;
-      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows] = await Promise.all([
+      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows,partCnRows] = await Promise.all([
         sb.select("fleet", cf),
         sb.select("diesel_deliveries", cf),
         sb.select("diesel_issues", cf),
@@ -2501,6 +2665,7 @@ function AuthenticatedApp() {
         sb.select("parts_purchases", cf),
         sb.select("repairs", cf),
         sb.select("purchase_slips", `app=eq.ops&${cf}`),
+        sb.select("supplier_credit_notes", `app=eq.ops&${cf}`),
       ]);
       const slipMap={}; (slipRows||[]).forEach(s=>{slipMap[s.id]=s;});
       setSlips(slipMap);
@@ -2530,6 +2695,11 @@ function AuthenticatedApp() {
         nd[lid].partIssues       = partIssRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date||"",partId:r.part_id,vehicle:r.vehicle_id||"",qty:+r.qty,notes:r.notes||""}));
         nd[lid].partPurchases    = partPurchRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,partId:r.part_id,qty:+r.qty,totalCost:+r.total_cost,supplier:r.supplier||"",notes:r.notes||"",slipId:r.slip_id||null}));
         nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||"",slipId:r.slip_id||null}));
+        // supplier_credit_notes.date is a native Postgres date column (comes
+        // back ISO, YYYY-MM-DD) — every other date in this app is stored as
+        // free text DD/MM/YYYY, so convert here once rather than special-
+        // casing credit notes everywhere they're displayed.
+        nd[lid].partCreditNotes  = partCnRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:fromISO(r.date),partId:r.item_id,itemDescription:r.item_description,qty:+r.qty,unitCost:+r.unit_cost,totalCredit:+r.total_credit,supplier:r.supplier||"",reason:r.reason,creditNoteNumber:r.credit_note_number||"",notes:r.notes||"",slipId:r.slip_id||null}));
       });
       setLocData(nd);
 
