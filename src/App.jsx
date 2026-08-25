@@ -7,6 +7,7 @@ import Login from "./Login.jsx";
 import SetPassword from "./SetPassword.jsx";
 import { CompanyProvider, useCompany } from "./CompanyContext.jsx";
 import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
+import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPurchase.js";
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const fmtR = n => `R ${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -2387,6 +2388,61 @@ export default function App() {
   );
 }
 
+// Quick-log a purchase straight to a member's account instead of any of
+// this app's own fuel/parts/repairs records — see memberPurchase.js. Only
+// shown when memberBillingEnabled is true for the current company (Demo
+// only today). Global (not tied to any one of Diesel/Petrol/Parts/Repairs)
+// since a member purchase is pass-through spend, not fleet/stock data.
+function MemberPurchaseModal({ companyId, locId, onClose }) {
+  const [members,setMembers]=useState([]);
+  const [form,setForm]=useState({member_id:"",date:new Date().toISOString().slice(0,10),description:"",amount:""});
+  const [saving,setSaving]=useState(false);
+  const [message,setMessage]=useState("");
+
+  useEffect(()=>{
+    listBillingMembers({companyId}).then(m=>{
+      setMembers(m);
+      setForm(f=>({...f,member_id:f.member_id||m[0]?.id||""}));
+    }).catch(()=>setMembers([]));
+  },[companyId]);
+
+  const save=async()=>{
+    setMessage("");
+    if(!form.member_id||!form.description||!form.amount){setMessage("Pick a member and fill in description + amount.");return;}
+    setSaving(true);
+    try{
+      await logMemberPurchase({companyId,memberId:form.member_id,locationId:locId,chargeDate:form.date,description:form.description,amount:form.amount});
+      setMessage("Logged to their member account.");
+      setForm(f=>({...f,description:"",amount:""}));
+    }catch(e){setMessage(e.message||"Could not save.");}
+    finally{setSaving(false);}
+  };
+
+  return (
+    <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal">
+        <div className="modal-title">Log <span>Member Purchase</span></div>
+        <div style={{fontSize:12,color:T.muted,marginBottom:10}}>Bought on a member's behalf — goes straight to their account, not this app's own records.</div>
+        <div className="field"><label>Member</label>
+          <select value={form.member_id} onChange={e=>setForm(p=>({...p,member_id:e.target.value}))}>
+            {members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </div>
+        <div className="grid2">
+          <div className="field"><label>Date</label><input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))}/></div>
+          <div className="field"><label>Amount (R)</label><input type="number" step="0.01" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))}/></div>
+        </div>
+        <div className="field"><label>Description</label><input type="text" value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="e.g. Spares run for a member's vehicle"/></div>
+        {message&&<div style={{fontSize:12,color:T.muted,marginBottom:8}}>{message}</div>}
+        <div style={{display:"flex",gap:9}}>
+          <button className="btn btn-primary" onClick={save} disabled={saving}>{saving?"Saving…":"Log to member account"}</button>
+          <button className="btn btn-ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AuthenticatedApp() {
   const {
     loading: companyLoading,
@@ -2396,10 +2452,12 @@ function AuthenticatedApp() {
     companyName,
     role,
     switchCompany,
+    memberBillingEnabled,
   } = useCompany();
 
   const [page,    setPage]    = useState("dashboard");
   const [locId,   setLocId]   = useState("ZC");
+  const [showMemberPurchase, setShowMemberPurchase] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [fleet,   setFleet]   = useState([]);
   const [locData, setLocData] = useState({ ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() });
@@ -2697,6 +2755,12 @@ function AuthenticatedApp() {
                   )}
                 </div>
               )}
+              {memberBillingEnabled && (
+                <button onClick={()=>setShowMemberPurchase(true)}
+                  style={{background:"none",border:"1px solid #3A3850",borderRadius:6,color:"#8A8899",fontSize:11,fontWeight:600,cursor:"pointer",padding:"5px 10px",flexShrink:0}}>
+                  + Member Purchase
+                </button>
+              )}
               <span className="month-badge">{monthLabel}</span>
               <button onClick={logout} title="Sign out"
                 style={{background:"none",border:"1px solid #3A3850",borderRadius:6,color:"#8A8899",fontSize:11,fontWeight:600,cursor:"pointer",padding:"5px 10px",flexShrink:0}}>
@@ -2704,6 +2768,7 @@ function AuthenticatedApp() {
               </button>
             </div>
           </div>
+          {showMemberPurchase && <MemberPurchaseModal companyId={companyId} locId={locId} onClose={()=>setShowMemberPurchase(false)}/>}
 
           {/* Mobile location bar */}
           <div className="mobile-loc-bar">
