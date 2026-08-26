@@ -397,7 +397,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
           <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
             <div>
               <div style={{fontSize:10,letterSpacing:".1em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:4}}>Opening Stock (L)</div>
-              <input type="number" value={loc.dieselOpening} onChange={e=>upd({dieselOpening:parseFloat(e.target.value)||0})}
+              <input type="number" inputMode="decimal" value={loc.dieselOpening} onChange={e=>upd({dieselOpening:parseFloat(e.target.value)||0})}
                 style={{width:130,background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Space Mono'",fontSize:14,outline:"none"}} placeholder="0"/>
             </div>
             <div style={{fontSize:12,color:T.muted,lineHeight:1.7,paddingTop:18}}>Set to litres in the tank at month start.</div>
@@ -486,8 +486,8 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
             }}/>
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={dForm.date} onChange={v=>setDForm(f=>({...f,date:v}))}/></div>
-              <div className="field"><label>Litres Delivered</label><input type="number" placeholder="e.g. 5000" value={dForm.litres} onChange={e=>setDForm(f=>({...f,litres:e.target.value}))}/></div>
-              <div className="field"><label>Price / Litre (R)</label><input type="number" step="0.01" value={dForm.pricePerLitre} onChange={e=>setDForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
+              <div className="field"><label>Litres Delivered</label><input type="number" inputMode="decimal" placeholder="e.g. 5000" value={dForm.litres} onChange={e=>setDForm(f=>({...f,litres:e.target.value}))}/></div>
+              <div className="field"><label>Price / Litre (R)</label><input type="number" inputMode="decimal" step="0.01" value={dForm.pricePerLitre} onChange={e=>setDForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
               <div className="field"><label>Supplier</label><input type="text" placeholder="e.g. Engen" value={dForm.supplier} onChange={e=>setDForm(f=>({...f,supplier:e.target.value}))}/></div>
               <div className="field"><label>Invoice #</label><input type="text" value={dForm.invoiceNo} onChange={e=>setDForm(f=>({...f,invoiceNo:e.target.value}))}/></div>
             </div>
@@ -514,10 +514,10 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
                   {dieselFleet.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
               </div>
-              <div className="field"><label>Opening Meter</label><input type="number" value={iForm.open} onChange={e=>setIForm(f=>({...f,open:e.target.value}))}/></div>
-              <div className="field"><label>Closing Meter</label><input type="number" value={iForm.close} onChange={e=>setIForm(f=>({...f,close:e.target.value,litres:String((parseFloat(e.target.value)||0)-(parseFloat(f.open)||0))}))}/></div>
-              <div className="field"><label>Litres (auto-calc)</label><input type="number" value={iForm.litres} onChange={e=>setIForm(f=>({...f,litres:e.target.value}))}/></div>
-              <div className="field"><label>Mileage / Hours</label><input type="text" value={iForm.mileage} onChange={e=>setIForm(f=>({...f,mileage:e.target.value}))}/></div>
+              <div className="field"><label>Opening Meter</label><input type="number" inputMode="decimal" value={iForm.open} onChange={e=>setIForm(f=>({...f,open:e.target.value}))}/></div>
+              <div className="field"><label>Closing Meter</label><input type="number" inputMode="decimal" value={iForm.close} onChange={e=>setIForm(f=>({...f,close:e.target.value,litres:String((parseFloat(e.target.value)||0)-(parseFloat(f.open)||0))}))}/></div>
+              <div className="field"><label>Litres (auto-calc)</label><input type="number" inputMode="decimal" value={iForm.litres} onChange={e=>setIForm(f=>({...f,litres:e.target.value}))}/></div>
+              <div className="field"><label>Mileage / Hours</label><input type="text" inputMode="decimal" value={iForm.mileage} onChange={e=>setIForm(f=>({...f,mileage:e.target.value}))}/></div>
             </div>
             <div className="field"><label>Notes</label><input type="text" value={iForm.notes} onChange={e=>setIForm(f=>({...f,notes:e.target.value}))}/></div>
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addIssue}>Save Issue</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></div>
@@ -530,7 +530,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
             <div className="modal-title">Log Tank <span>Dip</span></div>
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={dipForm.date} onChange={v=>setDipForm(f=>({...f,date:v}))}/></div>
-              <div className="field"><label>Dip Reading (L)</label><input type="number" value={dipForm.litres} onChange={e=>setDipForm(f=>({...f,litres:e.target.value}))}/></div>
+              <div className="field"><label>Dip Reading (L)</label><input type="number" inputMode="decimal" value={dipForm.litres} onChange={e=>setDipForm(f=>({...f,litres:e.target.value}))}/></div>
             </div>
             {dipForm.litres&&(()=>{
               const dip=parseFloat(dipForm.litres)||0;const v=dip-theoretical;const ok=Math.abs(v)<50;
@@ -679,7 +679,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
           <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
             <div>
               <div style={{fontSize:10,letterSpacing:".1em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:4}}>Opening Stock (L)</div>
-              <input type="number" value={loc.petrolOpening} onChange={e=>upd({petrolOpening:parseFloat(e.target.value)||0})}
+              <input type="number" inputMode="decimal" value={loc.petrolOpening} onChange={e=>upd({petrolOpening:parseFloat(e.target.value)||0})}
                 style={{width:130,background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Space Mono'",fontSize:14,outline:"none"}} placeholder="0"/>
             </div>
             <div style={{fontSize:12,color:T.muted,lineHeight:1.7,paddingTop:18}}>Litres in jerrycans at month start.</div>
@@ -733,8 +733,8 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
             }}/>
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={pForm.date} onChange={v=>setPForm(f=>({...f,date:v}))}/></div>
-              <div className="field"><label>Litres</label><input type="number" value={pForm.litres} onChange={e=>setPForm(f=>({...f,litres:e.target.value}))}/></div>
-              <div className="field"><label>Price / Litre (R)</label><input type="number" step="0.01" value={pForm.pricePerLitre} onChange={e=>setPForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
+              <div className="field"><label>Litres</label><input type="number" inputMode="decimal" value={pForm.litres} onChange={e=>setPForm(f=>({...f,litres:e.target.value}))}/></div>
+              <div className="field"><label>Price / Litre (R)</label><input type="number" inputMode="decimal" step="0.01" value={pForm.pricePerLitre} onChange={e=>setPForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
               <div className="field"><label>Filling Station</label><input type="text" placeholder="e.g. BP Modimolle" value={pForm.station} onChange={e=>setPForm(f=>({...f,station:e.target.value}))}/></div>
             </div>
             {pForm.litres&&pForm.pricePerLitre&&(
@@ -761,13 +761,13 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                     </select>
                   </div>
                   <div className="field"><label>Litres to Vehicle</label>
-                    <input type="number" placeholder={pForm.litres||"0"} value={pForm.issueLitres}
+                    <input type="number" inputMode="decimal" placeholder={pForm.litres||"0"} value={pForm.issueLitres}
                       onChange={e=>setPForm(f=>({...f,issueLitres:e.target.value}))}/>
                   </div>
                 </div>
                 <div className="field" style={{marginBottom:0}}>
                   <label>Mileage / Hours</label>
-                  <input type="text" value={pForm.issueMileage} onChange={e=>setPForm(f=>({...f,issueMileage:e.target.value}))}/>
+                  <input type="text" inputMode="decimal" value={pForm.issueMileage} onChange={e=>setPForm(f=>({...f,issueMileage:e.target.value}))}/>
                 </div>
                 {parseFloat(pForm.issueLitres)>parseFloat(pForm.litres||0) && (
                   <div style={{fontSize:11,color:T.warn,marginTop:8}}>
@@ -793,8 +793,8 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                   {petrolFleet.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
               </div>
-              <div className="field"><label>Litres</label><input type="number" value={iForm.litres} onChange={e=>setIForm(f=>({...f,litres:e.target.value}))}/></div>
-              <div className="field"><label>Mileage / Hours</label><input type="text" value={iForm.mileage} onChange={e=>setIForm(f=>({...f,mileage:e.target.value}))}/></div>
+              <div className="field"><label>Litres</label><input type="number" inputMode="decimal" value={iForm.litres} onChange={e=>setIForm(f=>({...f,litres:e.target.value}))}/></div>
+              <div className="field"><label>Mileage / Hours</label><input type="text" inputMode="decimal" value={iForm.mileage} onChange={e=>setIForm(f=>({...f,mileage:e.target.value}))}/></div>
             </div>
             <div className="field"><label>Notes</label><input type="text" value={iForm.notes} onChange={e=>setIForm(f=>({...f,notes:e.target.value}))}/></div>
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addIssue}>Save</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></div>
@@ -1170,11 +1170,11 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
                   {["each","litre","kg","set","box","pair","metre"].map(u=><option key={u}>{u}</option>)}
                 </select>
               </div>
-              <div className="field"><label>Opening Cost (R)</label><input type="number" value={form.openCost} onChange={e=>setForm(f=>({...f,openCost:e.target.value}))}/></div>
-              <div className="field"><label>Opening Qty</label><input type="number" value={form.openQty} onChange={e=>setForm(f=>({...f,openQty:e.target.value}))}/></div>
-              <div className="field"><label>Purchase Qty</label><input type="number" value={form.purchaseQty} onChange={e=>setForm(f=>({...f,purchaseQty:e.target.value}))}/></div>
-              <div className="field"><label>Purchase Cost (R excl VAT)</label><input type="number" value={form.purchaseCost} onChange={e=>setForm(f=>({...f,purchaseCost:e.target.value}))}/></div>
-              <div className="field"><label>Closing Qty (Count)</label><input type="number" value={form.closingQty} onChange={e=>setForm(f=>({...f,closingQty:e.target.value}))}/></div>
+              <div className="field"><label>Opening Cost (R)</label><input type="number" inputMode="decimal" value={form.openCost} onChange={e=>setForm(f=>({...f,openCost:e.target.value}))}/></div>
+              <div className="field"><label>Opening Qty</label><input type="number" inputMode="decimal" value={form.openQty} onChange={e=>setForm(f=>({...f,openQty:e.target.value}))}/></div>
+              <div className="field"><label>Purchase Qty</label><input type="number" inputMode="decimal" value={form.purchaseQty} onChange={e=>setForm(f=>({...f,purchaseQty:e.target.value}))}/></div>
+              <div className="field"><label>Purchase Cost (R excl VAT)</label><input type="number" inputMode="decimal" value={form.purchaseCost} onChange={e=>setForm(f=>({...f,purchaseCost:e.target.value}))}/></div>
+              <div className="field"><label>Closing Qty (Count)</label><input type="number" inputMode="decimal" value={form.closingQty} onChange={e=>setForm(f=>({...f,closingQty:e.target.value}))}/></div>
             </div>
             <div className="field"><label>Purchased From</label><input type="text" value={form.purchaseFrom} onChange={e=>setForm(f=>({...f,purchaseFrom:e.target.value}))}/></div>
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addPart}>Save Part</button><button className="btn btn-ghost" onClick={()=>setShowForm(false)}>Cancel</button></div>
@@ -1198,7 +1198,7 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
               </select>
             </div>
             <div className="field"><label>Date</label><DateField value={issueForm.date} onChange={v=>setIssueForm(f=>({...f,date:v}))}/></div>
-            <div className="field"><label>Quantity</label><input type="number" min="0" value={issueForm.qty} onChange={e=>setIssueForm(f=>({...f,qty:e.target.value}))}/></div>
+            <div className="field"><label>Quantity</label><input type="number" inputMode="decimal" min="0" value={issueForm.qty} onChange={e=>setIssueForm(f=>({...f,qty:e.target.value}))}/></div>
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={issuePart} disabled={issueBusy}>{issueBusy?"Issuing...":"Issue Part"}</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)} disabled={issueBusy}>Cancel</button></div>
           </div>
         </div>
@@ -1225,8 +1225,8 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
             </div>
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={purchaseForm.date} onChange={v=>setPurchaseForm(f=>({...f,date:v}))}/></div>
-              <div className="field"><label>Quantity</label><input type="number" min="0" value={purchaseForm.qty} onChange={e=>setPurchaseForm(f=>({...f,qty:e.target.value}))}/></div>
-              <div className="field"><label>Total Cost (R excl VAT)</label><input type="number" step="0.01" value={purchaseForm.totalCost} onChange={e=>setPurchaseForm(f=>({...f,totalCost:e.target.value}))}/></div>
+              <div className="field"><label>Quantity</label><input type="number" inputMode="decimal" min="0" value={purchaseForm.qty} onChange={e=>setPurchaseForm(f=>({...f,qty:e.target.value}))}/></div>
+              <div className="field"><label>Total Cost (R excl VAT)</label><input type="number" inputMode="decimal" step="0.01" value={purchaseForm.totalCost} onChange={e=>setPurchaseForm(f=>({...f,totalCost:e.target.value}))}/></div>
               <div className="field"><label>Supplier</label><input type="text" value={purchaseForm.supplier} onChange={e=>setPurchaseForm(f=>({...f,supplier:e.target.value}))}/></div>
             </div>
             {purchaseForm.qty&&purchaseForm.totalCost&&(
@@ -1256,8 +1256,8 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
             </div>
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={creditForm.date} onChange={v=>setCreditForm(f=>({...f,date:v}))}/></div>
-              <div className="field"><label>Qty returned</label><input type="number" min="0" value={creditForm.qty} onChange={e=>setCreditForm(f=>({...f,qty:e.target.value}))}/></div>
-              <div className="field"><label>Unit cost (R excl VAT)</label><input type="number" step="0.01" value={creditForm.unitCost} onChange={e=>setCreditForm(f=>({...f,unitCost:e.target.value}))}/></div>
+              <div className="field"><label>Qty returned</label><input type="number" inputMode="decimal" min="0" value={creditForm.qty} onChange={e=>setCreditForm(f=>({...f,qty:e.target.value}))}/></div>
+              <div className="field"><label>Unit cost (R excl VAT)</label><input type="number" inputMode="decimal" step="0.01" value={creditForm.unitCost} onChange={e=>setCreditForm(f=>({...f,unitCost:e.target.value}))}/></div>
               <div className="field"><label>Supplier</label><input type="text" value={creditForm.supplier} onChange={e=>setCreditForm(f=>({...f,supplier:e.target.value}))}/></div>
             </div>
             <div className="field"><label>Reason</label>
@@ -1420,9 +1420,9 @@ function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipA
               <textarea rows={3} placeholder="Describe what was repaired or replaced..." value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} style={{width:"100%",background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Inter',sans-serif",fontSize:13,outline:"none",resize:"vertical"}} onFocus={e=>e.target.style.borderColor=T.gold} onBlur={e=>e.target.style.borderColor=T.border}/>
             </div>
             <div className="grid3">
-              <div className="field"><label>Labour (R)</label><input type="number" min="0" value={form.labourCost} onChange={e=>setForm(f=>({...f,labourCost:e.target.value}))}/></div>
-              <div className="field"><label>Parts (R)</label><input type="number" min="0" value={form.partsCost} onChange={e=>setForm(f=>({...f,partsCost:e.target.value}))}/></div>
-              <div className="field"><label>Other (R)</label><input type="number" min="0" value={form.otherCost} onChange={e=>setForm(f=>({...f,otherCost:e.target.value}))}/></div>
+              <div className="field"><label>Labour (R)</label><input type="number" inputMode="decimal" min="0" value={form.labourCost} onChange={e=>setForm(f=>({...f,labourCost:e.target.value}))}/></div>
+              <div className="field"><label>Parts (R)</label><input type="number" inputMode="decimal" min="0" value={form.partsCost} onChange={e=>setForm(f=>({...f,partsCost:e.target.value}))}/></div>
+              <div className="field"><label>Other (R)</label><input type="number" inputMode="decimal" min="0" value={form.otherCost} onChange={e=>setForm(f=>({...f,otherCost:e.target.value}))}/></div>
             </div>
             <div className="info-box" style={{marginBottom:12}}>
               <span style={{fontSize:11,color:T.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:".06em"}}>Invoice Total</span>
@@ -1998,15 +1998,15 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
                 <DateField value={form.last_service_date} onChange={v=>setForm(f=>({...f,last_service_date:v}))}/>
               </div>
               <div className="field"><label>Interval (months)</label>
-                <input type="number" min="0" placeholder="e.g. 12" value={form.service_interval_months}
+                <input type="number" inputMode="decimal" min="0" placeholder="e.g. 12" value={form.service_interval_months}
                   onChange={e=>setForm(f=>({...f,service_interval_months:e.target.value}))}/>
               </div>
               <div className="field"><label>Odometer at Last Service (km)</label>
-                <input type="number" min="0" placeholder="e.g. 82000" value={form.last_service_km}
+                <input type="number" inputMode="decimal" min="0" placeholder="e.g. 82000" value={form.last_service_km}
                   onChange={e=>setForm(f=>({...f,last_service_km:e.target.value}))}/>
               </div>
               <div className="field"><label>Interval (km)</label>
-                <input type="number" min="0" placeholder="e.g. 10000" value={form.service_interval_km}
+                <input type="number" inputMode="decimal" min="0" placeholder="e.g. 10000" value={form.service_interval_km}
                   onChange={e=>setForm(f=>({...f,service_interval_km:e.target.value}))}/>
               </div>
             </div>
@@ -2594,7 +2594,7 @@ function MemberPurchaseModal({ companyId, locId, onClose }) {
         </div>
         <div className="grid2">
           <div className="field"><label>Date</label><input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))}/></div>
-          <div className="field"><label>Amount (R)</label><input type="number" step="0.01" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))}/></div>
+          <div className="field"><label>Amount (R)</label><input type="number" inputMode="decimal" step="0.01" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))}/></div>
         </div>
         <div className="field"><label>Description</label><input type="text" value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="e.g. Spares run for a member's vehicle"/></div>
         {message&&<div style={{fontSize:12,color:T.muted,marginBottom:8}}>{message}</div>}
