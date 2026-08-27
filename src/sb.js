@@ -37,55 +37,93 @@ async function headers(extra = {}) {
   }
 }
 
+// Transient clock-skew retry (2026-08-26).
+//
+// Supabase sometimes rejects a perfectly valid token with PGRST303 ("JWT
+// issued at future"): its Auth service mints the token using one node's
+// clock, PostgREST validates it against another, and if Auth is a second or
+// two ahead the token looks like it hasn't been issued yet. It's transient,
+// server-side, and nothing to do with this app or the user's device — the
+// same request succeeds moments later.
+//
+// So: retry once after a short pause, then let the error surface normally.
+// Deliberately NOT "fixed" by adding clock leeway or skipping iat
+// verification — that's a real signature check, and weakening it to paper
+// over infrastructure drift would weaken auth for every user. If this starts
+// happening a lot, the actual fix is a Supabase support ticket, not more
+// retries here.
+const CLOCK_SKEW_RETRY_MS = 1500
+
+async function isClockSkewError(res) {
+  if (res.ok) return false
+  try {
+    const body = await res.clone().text()
+    return body.includes('PGRST303') || body.includes('JWT issued at future')
+  } catch {
+    return false
+  }
+}
+
+// buildInit is a function, not an object, so the retry rebuilds its headers
+// and picks up a refreshed access token if the client rotated one meanwhile.
+async function sbFetch(url, buildInit) {
+  let res = await fetch(url, await buildInit())
+  if (await isClockSkewError(res)) {
+    await new Promise((r) => setTimeout(r, CLOCK_SKEW_RETRY_MS))
+    res = await fetch(url, await buildInit())
+  }
+  return res
+}
+
 export const sb = {
   async select(table, filters = '') {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?${filters}&order=created_at.desc`, {
+    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?${filters}&order=created_at.desc`, async () => ({
       headers: await headers(),
-    })
+    }))
     if (!res.ok) throw new Error(await res.text())
     return res.json()
   },
   async insert(table, row) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}`, {
+    const res = await sbFetch(`${SB_URL}/rest/v1/${table}`, async () => ({
       method: 'POST',
       headers: await headers(),
       body: JSON.stringify(row),
-    })
+    }))
     if (!res.ok) throw new Error(await res.text())
     const d = await res.json()
     return Array.isArray(d) ? d[0] : d
   },
   async upsert(table, row, onConflict) {
     const url = onConflict ? `${SB_URL}/rest/v1/${table}?on_conflict=${onConflict}` : `${SB_URL}/rest/v1/${table}`
-    const res = await fetch(url, {
+    const res = await sbFetch(url, async () => ({
       method: 'POST',
       headers: await headers({ Prefer: 'resolution=merge-duplicates,return=representation' }),
       body: JSON.stringify(row),
-    })
+    }))
     if (!res.ok) throw new Error(await res.text())
     const d = await res.json()
     return Array.isArray(d) ? d[0] : d
   },
   async delete(table, id) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, {
+    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, async () => ({
       method: 'DELETE',
       headers: await headers(),
-    })
+    }))
     if (!res.ok) throw new Error(await res.text())
   },
   async patch(table, id, row) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, async () => ({
       method: 'PATCH',
       headers: await headers(),
       body: JSON.stringify(row),
-    })
+    }))
     if (!res.ok) throw new Error(await res.text())
   },
   async deleteById(table, id) {
-    const res = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, async () => ({
       method: 'DELETE',
       headers: await headers(),
-    })
+    }))
     if (!res.ok) throw new Error(await res.text())
   },
 }
