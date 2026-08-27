@@ -21,16 +21,37 @@
 // [[feedback-git-and-async-gotchas]] for why that step matters).
 
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseClient.js'
+import {
+  cacheSelect,
+  readCachedSelect,
+  enqueue,
+  listQueue,
+  applyQueueToRows,
+  isNetworkFailure,
+  registerReplayer,
+} from './offline.js'
 
 const SB_URL = SUPABASE_URL
 
+// Last token we successfully saw, kept in memory as an offline fallback.
+// getSession() reads localStorage, but if the access token has expired it
+// tries to refresh — which needs the network. Offline that throws, and
+// without this fallback every queued write would fail to even build headers.
+let lastKnownToken = null
+
 async function headers(extra = {}) {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
+  let session = null
+  try {
+    ;({
+      data: { session },
+    } = await supabase.auth.getSession())
+    if (session?.access_token) lastKnownToken = session.access_token
+  } catch {
+    // Offline, or refresh failed — fall through to lastKnownToken below.
+  }
   return {
     apikey: SUPABASE_ANON_KEY,
-    Authorization: `Bearer ${session?.access_token || SUPABASE_ANON_KEY}`,
+    Authorization: `Bearer ${session?.access_token || lastKnownToken || SUPABASE_ANON_KEY}`,
     'Content-Type': 'application/json',
     Prefer: 'return=representation',
     ...extra,
@@ -75,56 +96,139 @@ async function sbFetch(url, buildInit) {
   return res
 }
 
-export const sb = {
-  async select(table, filters = '') {
-    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?${filters}&order=created_at.desc`, async () => ({
-      headers: await headers(),
-    }))
-    if (!res.ok) throw new Error(await res.text())
-    return res.json()
-  },
-  async insert(table, row) {
-    const res = await sbFetch(`${SB_URL}/rest/v1/${table}`, async () => ({
-      method: 'POST',
-      headers: await headers(),
-      body: JSON.stringify(row),
-    }))
-    if (!res.ok) throw new Error(await res.text())
-    const d = await res.json()
-    return Array.isArray(d) ? d[0] : d
-  },
-  async upsert(table, row, onConflict) {
-    const url = onConflict ? `${SB_URL}/rest/v1/${table}?on_conflict=${onConflict}` : `${SB_URL}/rest/v1/${table}`
-    const res = await sbFetch(url, async () => ({
+// --- Offline layer (2026-08-26) -------------------------------------------
+//
+// Crew work where there's no signal. Reads fall back to a local cache, writes
+// fall into a durable queue that uploads itself once coverage returns. See
+// offline.js for the full reasoning; the important part here is that ONLINE
+// BEHAVIOUR IS UNCHANGED — same requests, same return values, same thrown
+// errors. The offline paths only engage when a request fails for network
+// reasons.
+
+async function httpError(res) {
+  const err = new Error(await res.text())
+  err.__httpStatus = res.status
+  return err
+}
+
+async function runRequest(url, buildInit) {
+  const res = await sbFetch(url, buildInit)
+  if (!res.ok) throw await httpError(res)
+  return res
+}
+
+registerReplayer(async (entry) => {
+  const { table, op, payload, matchId } = entry
+  if (op === 'insert' || op === 'upsert') {
+    // Replayed as upsert-on-id so a partially-completed sync can't duplicate
+    // a row. Safe because every row here carries a client-generated id.
+    const onConflict = entry.onConflict || 'id'
+    await runRequest(`${SB_URL}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`, async () => ({
       method: 'POST',
       headers: await headers({ Prefer: 'resolution=merge-duplicates,return=representation' }),
-      body: JSON.stringify(row),
+      body: JSON.stringify(payload),
     }))
-    if (!res.ok) throw new Error(await res.text())
-    const d = await res.json()
-    return Array.isArray(d) ? d[0] : d
-  },
-  async delete(table, id) {
-    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, async () => ({
-      method: 'DELETE',
-      headers: await headers(),
-    }))
-    if (!res.ok) throw new Error(await res.text())
-  },
-  async patch(table, id, row) {
-    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, async () => ({
+  } else if (op === 'update') {
+    await runRequest(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(matchId)}`, async () => ({
       method: 'PATCH',
       headers: await headers(),
-      body: JSON.stringify(row),
+      body: JSON.stringify(payload),
     }))
-    if (!res.ok) throw new Error(await res.text())
-  },
-  async deleteById(table, id) {
-    const res = await sbFetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, async () => ({
+  } else if (op === 'delete') {
+    await runRequest(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(matchId)}`, async () => ({
       method: 'DELETE',
       headers: await headers(),
     }))
-    if (!res.ok) throw new Error(await res.text())
+  }
+})
+
+export const sb = {
+  async select(table, filters = '') {
+    const url = `${SB_URL}/rest/v1/${table}?${filters}&order=created_at.desc`
+    try {
+      const res = await runRequest(url, async () => ({ headers: await headers() }))
+      const rows = await res.json()
+      cacheSelect(url, rows)
+      const queue = await listQueue()
+      return queue.length ? applyQueueToRows(table, url, rows, queue) : rows
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err
+      const cached = await readCachedSelect(url)
+      const queue = await listQueue()
+      return applyQueueToRows(table, url, cached == null ? [] : cached, queue)
+    }
+  },
+
+  async insert(table, row) {
+    try {
+      const res = await runRequest(`${SB_URL}/rest/v1/${table}`, async () => ({
+        method: 'POST',
+        headers: await headers(),
+        body: JSON.stringify(row),
+      }))
+      const d = await res.json()
+      return Array.isArray(d) ? d[0] : d
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err
+      await enqueue({ table, op: 'insert', payload: row })
+      return Array.isArray(row) ? row[0] : row
+    }
+  },
+
+  async upsert(table, row, onConflict) {
+    const url = onConflict ? `${SB_URL}/rest/v1/${table}?on_conflict=${onConflict}` : `${SB_URL}/rest/v1/${table}`
+    try {
+      const res = await runRequest(url, async () => ({
+        method: 'POST',
+        headers: await headers({ Prefer: 'resolution=merge-duplicates,return=representation' }),
+        body: JSON.stringify(row),
+      }))
+      const d = await res.json()
+      return Array.isArray(d) ? d[0] : d
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err
+      // Carry the caller's own conflict target through, so the replay
+      // deduplicates on the same key the caller intended rather than on id.
+      await enqueue({ table, op: 'upsert', payload: row, onConflict: onConflict || 'id' })
+      return Array.isArray(row) ? row[0] : row
+    }
+  },
+
+  async delete(table, id) {
+    try {
+      await runRequest(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, async () => ({
+        method: 'DELETE',
+        headers: await headers(),
+      }))
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err
+      await enqueue({ table, op: 'delete', matchId: id })
+    }
+  },
+
+  async patch(table, id, row) {
+    try {
+      await runRequest(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, async () => ({
+        method: 'PATCH',
+        headers: await headers(),
+        body: JSON.stringify(row),
+      }))
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err
+      await enqueue({ table, op: 'update', matchId: id, payload: row })
+    }
+  },
+
+  async deleteById(table, id) {
+    try {
+      await runRequest(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, async () => ({
+        method: 'DELETE',
+        headers: await headers(),
+      }))
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err
+      await enqueue({ table, op: 'delete', matchId: id })
+    }
   },
 }
 
