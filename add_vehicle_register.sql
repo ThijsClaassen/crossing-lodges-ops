@@ -106,7 +106,12 @@ create table if not exists vehicle_trips (
                                     -- (guests and contractors drive too)
 
   start_km numeric not null,
-  end_km numeric not null,
+  -- Nullable on purpose: crew log the trip as they leave and close it off when
+  -- they get back, which may be hours later and after the app has been shut.
+  -- An open trip (end_km null) is a normal state. km and trip_cost below both
+  -- evaluate to null while it's open, and the check constraint passes on null,
+  -- so an open trip simply carries no distance or cost until it's closed.
+  end_km numeric,
   km numeric generated always as (end_km - start_km) stored,
 
   -- Only set when the purpose is a maintenance one. on delete set null so

@@ -14,6 +14,11 @@ import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPu
 const fmtR = n => `R ${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtL = n => `${Number(n).toLocaleString()} L`;
 const fmtNum = n => Number(n || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
+// This app's today() returns DD/MM/YYYY, which the older fuel screens store
+// as text via DateField. vehicle_trips.trip_date is a real Postgres `date`
+// column, and a native <input type="date"> only accepts ISO — so it needs its
+// own helper rather than reusing today().
+const todayISO = () => new Date().toISOString().slice(0, 10);
 const uid   = () => crypto.randomUUID();
 const round2 = n => Math.round((Number(n)||0)*100)/100;
 
@@ -3195,7 +3200,7 @@ function OfflineStatus() {
 // exercise: internal invoices that carry the real vehicle cost of getting
 // someone to the job, not just their time and parts.
 function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes, hrEmployees, jobs, isAdmin, companyId }) {
-  const blank = { vehicle_id:"", trip_date:today(), driver_employee_id:"", driver_name:"",
+  const blank = { vehicle_id:"", trip_date:todayISO(), driver_employee_id:"", driver_name:"",
                   purpose_id:"", start_km:"", end_km:"", job_id:"", notes:"" };
   const [form, setForm] = useState(blank);
   const [showForm, setShowForm] = useState(false);
@@ -3203,6 +3208,10 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
   const [err, setErr] = useState("");
   const [showPurposes, setShowPurposes] = useState(false);
   const [locFilter, setLocFilter] = useState(locId);
+  // A trip with no end reading yet — the vehicle is still out.
+  const [closing, setClosing] = useState(null);   // the trip being closed
+  const [closeKm, setCloseKm] = useState("");
+  const [closeErr, setCloseErr] = useState("");
 
   useEffect(()=>{ setLocFilter(locId); },[locId]);
 
@@ -3210,8 +3219,12 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
   // offline (queued, not yet synced) has neither until it reaches the server.
   // Deriving them here means an offline-logged trip still shows its real
   // distance and cost instead of a misleading 0.
-  const tripKm   = t => t.km != null ? t.km : (Number(t.end_km||0) - Number(t.start_km||0));
-  const tripCost = t => t.trip_cost != null ? t.trip_cost : tripKm(t) * Number(t.cost_per_km||0);
+  // hr_employees stores first_name/last_name — there is no `name` column.
+  // Same join the Maintenance app does for its crew pickers.
+  const staffName = e => e ? `${e.first_name||""} ${e.last_name||""}`.trim() || "(unnamed)" : "";
+  const isOpen   = t => t.end_km == null;
+  const tripKm   = t => t.end_km == null ? 0 : (t.km != null ? t.km : Number(t.end_km) - Number(t.start_km));
+  const tripCost = t => t.end_km == null ? 0 : (t.trip_cost != null ? t.trip_cost : tripKm(t) * Number(t.cost_per_km||0));
 
   const vehicleById = useMemo(()=>Object.fromEntries(fleet.map(v=>[v.id,v])),[fleet]);
   const purposeById = useMemo(()=>Object.fromEntries(purposes.map(p=>[p.id,p])),[purposes]);
@@ -3222,7 +3235,11 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
   const lastKmByVehicle = useMemo(()=>{
     const m = {};
     for (const t of trips) {
-      if (!m[t.vehicle_id] || Number(t.end_km) > m[t.vehicle_id]) m[t.vehicle_id] = Number(t.end_km);
+      // An open trip has no end reading, but its START is still the last thing
+      // we know about that vehicle — otherwise the next trip would prefill
+      // from an older reading and understate the distance.
+      const known = t.end_km != null ? Number(t.end_km) : Number(t.start_km);
+      if (!m[t.vehicle_id] || known > m[t.vehicle_id]) m[t.vehicle_id] = known;
     }
     return m;
   },[trips]);
@@ -3251,12 +3268,18 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
     if(!form.vehicle_id) return setErr("Pick a vehicle.");
     if(!form.purpose_id) return setErr("Pick what the trip was for.");
     const driver = form.driver_employee_id
-      ? (hrEmployees.find(e=>e.id===form.driver_employee_id)?.name || "")
+      ? staffName(hrEmployees.find(e=>e.id===form.driver_employee_id))
       : form.driver_name.trim();
     if(!driver) return setErr("Say who was driving.");
-    const s = parseFloat(form.start_km), e = parseFloat(form.end_km);
-    if(!(s>=0) || !(e>=0)) return setErr("Both odometer readings are needed.");
-    if(e < s) return setErr("The closing reading can't be lower than the opening one.");
+    const s = parseFloat(form.start_km);
+    if(!(s>=0)) return setErr("The opening odometer reading is needed.");
+    // End reading is optional on purpose: crew log the trip as they leave and
+    // close it off when they get back, which may be hours later and after the
+    // app has been shut. An open trip is a normal state, not an error.
+    const hasEnd = form.end_km !== "" && form.end_km != null;
+    const e = hasEnd ? parseFloat(form.end_km) : null;
+    if(hasEnd && !(e>=0)) return setErr("That closing reading doesn't look like a number.");
+    if(hasEnd && e < s) return setErr("The closing reading can't be lower than the opening one.");
     if(isMaintenanceTrip && !form.job_id) return setErr("Pick the job card this trip was for, so its cost lands on the right job.");
 
     setSaving(true);
@@ -3267,7 +3290,7 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
         trip_date: form.trip_date,
         driver_name: driver,
         driver_employee_id: form.driver_employee_id || null,
-        start_km: s, end_km: e,
+        start_km: s, end_km: e,   // null while the vehicle is still out
         job_id: isMaintenanceTrip ? (form.job_id || null) : null,
         // Snapshot the rate in force now. Changing a vehicle's rate later must
         // not silently restate trips that have already been invoiced.
@@ -3277,11 +3300,28 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
       await sb.insert("vehicle_trips", row);
       // km/trip_cost are generated in the database; mirror them locally so the
       // row renders correctly without waiting for a reload.
-      setTrips(p=>[...p, {...row, km: e-s, trip_cost: (row.cost_per_km||0)*(e-s)}]);
+      setTrips(p=>[...p, {...row,
+        km: e==null?null:e-s,
+        trip_cost: e==null?null:(row.cost_per_km||0)*(e-s)}]);
       setForm({...blank, trip_date:form.trip_date});
       setShowForm(false);
     } catch(ex) { setErr(ex.message); }
     finally { setSaving(false); }
+  }
+
+  async function closeTrip() {
+    setCloseErr("");
+    const t = closing;
+    const e = parseFloat(closeKm);
+    if(!(e>=0)) return setCloseErr("Enter the closing odometer reading.");
+    if(e < Number(t.start_km)) return setCloseErr(`Can't be below the opening reading of ${fmtNum(t.start_km)}.`);
+    try {
+      await sb.patch("vehicle_trips", t.id, { end_km: e });
+      setTrips(p=>p.map(x=>x.id===t.id
+        ? {...x, end_km:e, km:e-Number(x.start_km), trip_cost:(x.cost_per_km||0)*(e-Number(x.start_km))}
+        : x));
+      setClosing(null); setCloseKm("");
+    } catch(ex){ setCloseErr(ex.message); }
   }
 
   async function remove(t) {
@@ -3344,7 +3384,8 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
           <div className="field"><label>Driver</label>
             <select value={form.driver_employee_id} onChange={e=>setForm(f=>({...f,driver_employee_id:e.target.value}))}>
               <option value="">— someone not on the staff list —</option>
-              {hrEmployees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+              {[...hrEmployees].sort((a,b)=>staffName(a).localeCompare(staffName(b)))
+                .map(e=><option key={e.id} value={e.id}>{staffName(e)}</option>)}
             </select>
           </div>
           {!form.driver_employee_id && (
@@ -3371,8 +3412,8 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
           <div className="field"><label>Odometer — start</label>
             <input type="number" inputMode="decimal" value={form.start_km}
               onChange={e=>setForm(f=>({...f,start_km:e.target.value}))}/></div>
-          <div className="field"><label>Odometer — end</label>
-            <input type="number" inputMode="decimal" value={form.end_km}
+          <div className="field"><label>Odometer — end <span style={{color:T.muted,fontWeight:400}}>(optional)</span></label>
+            <input type="number" inputMode="decimal" value={form.end_km} placeholder="leave blank if still out"
               onChange={e=>setForm(f=>({...f,end_km:e.target.value}))}/></div>
         </div>
 
@@ -3395,8 +3436,42 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
 
         {err && <div style={{fontSize:12,color:T.danger,marginTop:8}}>{err}</div>}
         <button className="btn" style={{marginTop:10}} disabled={saving} onClick={save}>
-          {saving?"Saving…":"Save trip"}
+          {saving?"Saving…":(form.end_km===""?"Start trip":"Save trip")}
         </button>
+      </div>
+    )}
+
+    {visible.filter(isOpen).length > 0 && (
+      <div className="section" style={{marginBottom:14,borderColor:`${T.warn}55`}}>
+        <div className="section-title" style={{color:T.warn}}>Still out ({visible.filter(isOpen).length})</div>
+        <div style={{fontSize:12,color:T.muted,marginBottom:10}}>
+          Trips started but not closed off. Add the closing odometer when the vehicle is back —
+          until then the trip carries no distance or cost.
+        </div>
+        {visible.filter(isOpen).map(t=>(
+          <div key={t.id} style={{padding:"8px 0",borderTop:`1px solid ${T.border}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{fontSize:13}}>
+                <span style={{fontWeight:600,color:T.cream}}>{vehicleById[t.vehicle_id]?.name||"—"}</span>
+                <span style={{color:T.muted}}> · {t.driver_name} · {purposeById[t.purpose_id]?.name||"—"}</span>
+                <span style={{color:T.muted}}> · out since {t.trip_date} at {fmtNum(t.start_km)} km</span>
+              </div>
+              {closing?.id===t.id ? (
+                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                  <input type="number" inputMode="decimal" autoFocus value={closeKm}
+                    onChange={e=>setCloseKm(e.target.value)} placeholder="closing km"
+                    style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
+                            fontFamily:"'Space Mono'",fontSize:13,padding:"6px 10px",width:130}}/>
+                  <button className="btn btn-primary btn-sm" onClick={closeTrip}>Save</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>{setClosing(null);setCloseKm("");setCloseErr("");}}>Cancel</button>
+                </div>
+              ) : (
+                <button className="btn btn-sm" onClick={()=>{setClosing(t);setCloseKm("");setCloseErr("");}}>Close trip</button>
+              )}
+            </div>
+            {closing?.id===t.id && closeErr && <div style={{fontSize:12,color:T.danger,marginTop:6}}>{closeErr}</div>}
+          </div>
+        ))}
       </div>
     )}
 
@@ -3414,8 +3489,9 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
             <td style={{fontSize:12}}>{t.driver_name}</td>
             <td style={{fontSize:12,color:T.muted}}>{purposeById[t.purpose_id]?.name||"—"}</td>
             <td className="num" style={{color:T.muted,fontSize:11}}>{fmtNum(t.start_km)}</td>
-            <td className="num" style={{color:T.muted,fontSize:11}}>{fmtNum(t.end_km)}</td>
-            <td className="num" style={{fontWeight:600}}>{fmtNum(tripKm(t))}</td>
+            <td className="num" style={{color:T.muted,fontSize:11}}>{isOpen(t)?"—":fmtNum(t.end_km)}</td>
+            <td className="num" style={{fontWeight:600}}>
+              {isOpen(t) ? <span style={{color:T.warn,fontWeight:400,fontSize:11}}>still out</span> : fmtNum(tripKm(t))}</td>
             <td className="num" style={{color:tripCost(t)?T.gold:T.border}}>{tripCost(t)?fmtR(tripCost(t)):"—"}</td>
             <td style={{fontSize:11,color:T.muted}}>{t.job_id?(jobById[t.job_id]?.name||"linked"):"—"}</td>
             <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(t)}>x</button>}</td>
