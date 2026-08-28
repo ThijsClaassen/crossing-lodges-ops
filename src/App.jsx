@@ -2029,18 +2029,6 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
               </div>
             </div>
 
-            {vehicleRegisterEnabled && (
-              <div className="field" style={{marginBottom:6}}>
-                <label>Running Cost (R per km)</label>
-                <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="e.g. 4.50"
-                  value={form.cost_per_km ?? ""} onChange={e=>setForm(f=>({...f,cost_per_km:e.target.value}))}/>
-                <div style={{fontSize:11,color:T.muted,marginTop:4}}>
-                  What a kilometre in this vehicle costs you all-in — fuel, tyres, wear. Used to put a value on
-                  trips in the Vehicle Log, and to bill maintenance trips to their job card. Leave blank and the
-                  vehicle's trips still record km, they just carry no cost.
-                </div>
-              </div>
-            )}
 
             <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:7,padding:"12px 13px",marginBottom:6}}>
               <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:form.self_serviced?12:0}}>
@@ -2083,74 +2071,129 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
 }
 
 // ─── COST SUMMARY ────────────────────────────────────────────────────────────
+
+// ─── VEHICLE RUNNING COST ────────────────────────────────────────────────────
+// One shared calculation, used by both the Cost Summary page and the Vehicle
+// Log's trip costing (2026-08-27). It used to live inside CostSummary; lifting
+// it out means the rate a trip is charged at is provably the same number the
+// Cost Summary shows, rather than two implementations drifting apart.
+//
+// Cost per km = (fuel + parts + repairs) / km driven, where km driven is the
+// spread between the highest and lowest odometer readings captured on that
+// vehicle's fuel issues. Needs at least two readings — a vehicle without them
+// has no rate of its own and falls back to the fleet average.
+//
+// Fuel is valued at the ACTUAL weighted-average price paid (2026-08-27), taken
+// from diesel deliveries and petrol purchases, instead of the hardcoded
+// R20.50/R21.50 constants this used to assume. Those constants remain only as
+// a fallback for a company with no purchase history yet — otherwise a "live"
+// cost per km would be resting on a price someone typed into the source once.
+
+const FALLBACK_DIESEL_PRICE = 20.5;
+const FALLBACK_PETROL_PRICE = 21.5;
+
+export function fuelPricesFrom(locData, locIds) {
+  let dLitres = 0, dSpend = 0, pLitres = 0, pSpend = 0;
+  for (const lid of locIds) {
+    const loc = locData?.[lid];
+    if (!loc) continue;
+    (loc.dieselDeliveries||[]).forEach(d => {
+      const l = Number(d.litres)||0, pr = Number(d.pricePerLitre)||0;
+      if (l > 0 && pr > 0) { dLitres += l; dSpend += l * pr; }
+    });
+    (loc.petrolPurchases||[]).forEach(d => {
+      const l = Number(d.litres)||0, pr = Number(d.pricePerLitre)||0;
+      if (l > 0 && pr > 0) { pLitres += l; pSpend += l * pr; }
+    });
+  }
+  return {
+    diesel: dLitres > 0 ? dSpend / dLitres : FALLBACK_DIESEL_PRICE,
+    petrol: pLitres > 0 ? pSpend / pLitres : FALLBACK_PETROL_PRICE,
+    dieselIsActual: dLitres > 0,
+    petrolIsActual: pLitres > 0,
+  };
+}
+
+// inMonth: null for lifetime, or (dateStr) => boolean for a single month.
+export function computeVehicleCosts({ locData, fleet, locIds, inMonth = null }) {
+  const price = fuelPricesFrom(locData, locIds);
+  const m = {};
+  (fleet||[]).forEach(v => {
+    m[v.id] = { fuel:0, parts:0, repairs:0, name:v.name, fuel_type:v.fuel, category:v.category, odomReadings:[] };
+  });
+
+  locIds.forEach(lid => {
+    const loc = locData?.[lid];
+    if (!loc) return;
+
+    loc.dieselIssues.forEach(e => {
+      if (inMonth && !inMonth(e.date)) return;
+      if (e.vehicle && m[e.vehicle]) {
+        m[e.vehicle].fuel += (e.litres||0) * price.diesel;
+        const km = parseFloat(e.mileage);
+        if (!isNaN(km) && km > 0) m[e.vehicle].odomReadings.push(km);
+      }
+    });
+    loc.petrolIssues.forEach(e => {
+      if (inMonth && !inMonth(e.date)) return;
+      if (e.vehicle && m[e.vehicle]) {
+        m[e.vehicle].fuel += Math.abs(e.litres < 0 ? e.litres : 0) * price.petrol;
+        const km = parseFloat(e.mileage);
+        if (!isNaN(km) && km > 0) m[e.vehicle].odomReadings.push(km);
+      }
+    });
+    loc.repairs.forEach(e => {
+      if (inMonth && !inMonth(e.date)) return;
+      if (m[e.vehicle]) m[e.vehicle].repairs += e.totalCost||0;
+    });
+    (loc.partIssues||[]).forEach(iss => {
+      if (inMonth && !inMonth(iss.date)) return;
+      if (m[iss.vehicle]) {
+        const unitCost = loc.parts.find(p=>p.id===iss.partId)?.openCost || 0;
+        m[iss.vehicle].parts += iss.qty * unitCost;
+      }
+    });
+  });
+
+  return Object.entries(m).map(([id, d]) => {
+    const total = d.fuel + d.parts + d.repairs;
+    const readings = d.odomReadings;
+    const kmDriven = readings.length >= 2 ? Math.max(...readings) - Math.min(...readings) : null;
+    const costPerKm = kmDriven && kmDriven > 0 ? total / kmDriven : null;
+    return { id, ...d, total, kmDriven, costPerKm };
+  })
+  .filter(r => r.total > 0)
+  .sort((a, b) => b.total - a.total);
+}
+
+// The rate a trip should actually be charged at, and where it came from — the
+// Vehicle Log shows the basis so nobody has to guess whether a figure is that
+// vehicle's own history or a stand-in.
+export function runningRateFor(vehicleId, costRows) {
+  const own = costRows.find(r => r.id === vehicleId);
+  if (own && own.costPerKm != null) return { rate: own.costPerKm, basis: "vehicle" };
+  const withRate = costRows.filter(r => r.costPerKm != null);
+  if (withRate.length) {
+    return { rate: withRate.reduce((s,r)=>s+r.costPerKm,0) / withRate.length, basis: "fleet" };
+  }
+  return { rate: null, basis: "none" };
+}
+
 function CostSummary({ locData, fleet, serviceJobs }) {
   const [viewLoc, setViewLoc]         = useState("all");
   const [detailVehicle, setDetailVehicle] = useState(null);
   const [costTab, setCostTab]         = useState("lifetime"); // "lifetime" | "monthly"
   const [monthCursor, setMonthCursor] = useState(() => { const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()}; });
-  const DIESEL_PRICE = 20.5;
-  const PETROL_PRICE = 21.5;
 
   const locsToShow = viewLoc === "all" ? LOCATIONS.map(l=>l.id) : [viewLoc];
 
-  // Shared per-vehicle cost aggregation, used by both tabs.
-  // inMonth: null = no filter (lifetime), or a (dateStr) => boolean predicate.
-  // Parts costs have no per-transaction date in the data model (see note below),
-  // so they can only ever be included when inMonth is null.
-  const computeCosts = (inMonth) => {
-    const m = {};
-    fleet.forEach(v => {
-      m[v.id] = { fuel:0, parts:0, repairs:0, name:v.name, fuel_type:v.fuel, category:v.category, odomReadings:[] };
-    });
-
-    locsToShow.forEach(lid => {
-      const loc = locData[lid];
-      if (!loc) return;
-
-      loc.dieselIssues.forEach(e => {
-        if (inMonth && !inMonth(e.date)) return;
-        if (e.vehicle && m[e.vehicle]) {
-          m[e.vehicle].fuel += (e.litres||0) * DIESEL_PRICE;
-          const km = parseFloat(e.mileage);
-          if (!isNaN(km) && km > 0) m[e.vehicle].odomReadings.push(km);
-        }
-      });
-      loc.petrolIssues.forEach(e => {
-        if (inMonth && !inMonth(e.date)) return;
-        if (e.vehicle && m[e.vehicle]) {
-          m[e.vehicle].fuel += Math.abs(e.litres < 0 ? e.litres : 0) * PETROL_PRICE;
-          const km = parseFloat(e.mileage);
-          if (!isNaN(km) && km > 0) m[e.vehicle].odomReadings.push(km);
-        }
-      });
-      loc.repairs.forEach(e => {
-        if (inMonth && !inMonth(e.date)) return;
-        if (m[e.vehicle]) m[e.vehicle].repairs += e.totalCost||0;
-      });
-      // Each part issue now carries its own date, same as fuel and repairs —
-      // no more special-casing needed here. Migrated historical rows (from
-      // before this tracking existed) have date = null, so inMonth correctly
-      // excludes them from any specific month while lifetime (inMonth=null)
-      // still counts them in full.
-      (loc.partIssues||[]).forEach(iss => {
-        if (inMonth && !inMonth(iss.date)) return;
-        if (m[iss.vehicle]) {
-          const unitCost = loc.parts.find(p=>p.id===iss.partId)?.openCost || 0;
-          m[iss.vehicle].parts += iss.qty * unitCost;
-        }
-      });
-    });
-
-    return Object.entries(m).map(([id, d]) => {
-      const total = d.fuel + d.parts + d.repairs;
-      const readings = d.odomReadings;
-      const kmDriven = readings.length >= 2 ? Math.max(...readings) - Math.min(...readings) : null;
-      const costPerKm = kmDriven && kmDriven > 0 ? total / kmDriven : null;
-      return { id, ...d, total, kmDriven, costPerKm };
-    })
-    .filter(r => r.total > 0)
-    .sort((a, b) => b.total - a.total);
-  };
+  // The calculation itself now lives in computeVehicleCosts() above, shared
+  // with the Vehicle Log so a trip is charged at exactly the rate shown here.
+  // It also values fuel at the real weighted-average price paid rather than
+  // the old hardcoded R20.50/R21.50 — so these figures may differ slightly
+  // from what this page showed before, and are closer to the truth for it.
+  const price = useMemo(()=>fuelPricesFrom(locData, locsToShow), [locData, viewLoc]);
+  const computeCosts = (inMonth) => computeVehicleCosts({ locData, fleet, locIds: locsToShow, inMonth });
 
   // ── LIFETIME ──
   const lifetime = useMemo(() => computeCosts(null), [locData, fleet, viewLoc]);
@@ -2233,8 +2276,15 @@ function CostSummary({ locData, fleet, serviceJobs }) {
             <div className="strip-val" style={{color: fleetAvgCpkm ? T.goldLt : T.muted}}>
               {fleetAvgCpkm ? `R ${fleetAvgCpkm.toFixed(2)}` : "—"}
             </div></div>
-          <div className="strip-item"><div className="strip-label">Diesel Rate</div><div className="strip-val" style={{color:T.fuel_d}}>R{DIESEL_PRICE}/L</div></div>
-          <div className="strip-item"><div className="strip-label">Petrol Rate</div><div className="strip-val" style={{color:T.fuel_p}}>R{PETROL_PRICE}/L</div></div>
+          {/* Now the real weighted-average price paid, not a constant. The
+              subtext says which, so a figure resting on the fallback is never
+              mistaken for one backed by actual purchases. */}
+          <div className="strip-item"><div className="strip-label">Diesel Rate</div>
+            <div className="strip-val" style={{color:T.fuel_d}}>R{price.diesel.toFixed(2)}/L</div>
+            <div style={{fontSize:10,color:T.muted,marginTop:2}}>{price.dieselIsActual?"avg. actually paid":"estimate — no deliveries logged"}</div></div>
+          <div className="strip-item"><div className="strip-label">Petrol Rate</div>
+            <div className="strip-val" style={{color:T.fuel_p}}>R{price.petrol.toFixed(2)}/L</div>
+            <div style={{fontSize:10,color:T.muted,marginTop:2}}>{price.petrolIsActual?"avg. actually paid":"estimate — no purchases logged"}</div></div>
         </div>
 
         {lifetime.length > 0 && withCpkm.length === 0 && (
@@ -3043,7 +3093,7 @@ function AuthenticatedApp() {
             {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="vehicles"  && vehicleRegisterEnabled && <VehicleRegister
-                                    locId={locId} fleet={fleet} trips={vehicleTrips} setTrips={setVehicleTrips}
+                                    locId={locId} locData={locData} fleet={fleet} trips={vehicleTrips} setTrips={setVehicleTrips}
                                     purposes={tripPurposes} setPurposes={setTripPurposes}
                                     hrEmployees={hrEmployees} jobs={vehicleJobs}
                                     isAdmin={isAdmin} companyId={companyId}/>}
@@ -3313,7 +3363,7 @@ function SearchableSelect({ value, onChange, options, placeholder = "Select…",
 // the job alongside labour and materials — which was the point of the whole
 // exercise: internal invoices that carry the real vehicle cost of getting
 // someone to the job, not just their time and parts.
-function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes, hrEmployees, jobs, isAdmin, companyId }) {
+function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, setPurposes, hrEmployees, jobs, isAdmin, companyId }) {
   const blank = { vehicle_id:"", trip_date:todayISO(), driver_employee_id:"", driver_name:"",
                   purpose_id:"", start_km:"", end_km:"", job_id:"", notes:"" };
   const [form, setForm] = useState(blank);
@@ -3339,6 +3389,18 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
   const isOpen   = t => t.end_km == null;
   const tripKm   = t => t.end_km == null ? 0 : (t.km != null ? t.km : Number(t.end_km) - Number(t.start_km));
   const tripCost = t => t.end_km == null ? 0 : (t.trip_cost != null ? t.trip_cost : tripKm(t) * Number(t.cost_per_km||0));
+
+  // Running rates come from the SAME calculation the Cost Summary page shows —
+  // real fuel/parts/repair spend divided by km actually driven — rather than a
+  // rate anybody types in (Thijs, 2026-08-27: "we don't fill anything in
+  // ourselves. Rather use the Cost/KM from the Cost Summary. As that is live
+  // and most up to date"). Computed across all lodges, since a vehicle's
+  // running cost is a property of the vehicle, not of where it happens to be
+  // parked.
+  const costRows = useMemo(
+    ()=>computeVehicleCosts({ locData, fleet, locIds: LOCATIONS.map(l=>l.id) }),
+    [locData, fleet]
+  );
 
   const vehicleById = useMemo(()=>Object.fromEntries(fleet.map(v=>[v.id,v])),[fleet]);
   const purposeById = useMemo(()=>Object.fromEntries(purposes.map(p=>[p.id,p])),[purposes]);
@@ -3367,7 +3429,7 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
   const isMaintenanceTrip = !!selectedPurpose?.is_maintenance;
 
   const km = (parseFloat(form.end_km)||0) - (parseFloat(form.start_km)||0);
-  const rate = vehicleById[form.vehicle_id]?.cost_per_km;
+  const { rate, basis } = runningRateFor(form.vehicle_id, costRows);
   const estCost = rate == null ? null : km * rate;
 
   function pickVehicle(id) {
@@ -3406,9 +3468,11 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
         driver_employee_id: form.driver_employee_id || null,
         start_km: s, end_km: e,   // null while the vehicle is still out
         job_id: isMaintenanceTrip ? (form.job_id || null) : null,
-        // Snapshot the rate in force now. Changing a vehicle's rate later must
-        // not silently restate trips that have already been invoiced.
-        cost_per_km: vehicleById[form.vehicle_id]?.cost_per_km ?? null,
+        // Snapshot the derived rate as it stands today. It's frozen here on
+        // purpose: the underlying cost/km keeps moving as fuel and repairs are
+        // logged, and an invoice that silently restates itself months later
+        // would be impossible to reconcile against.
+        cost_per_km: rate,
         notes: form.notes.trim() || null,
       };
       await sb.insert("vehicle_trips", row);
@@ -3490,8 +3554,12 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
             <SearchableSelect
               value={form.vehicle_id}
               onChange={pickVehicle}
-              options={fleet.map(v=>({ value:v.id,
-                label:`${v.name}${v.cost_per_km!=null?` — ${fmtR(v.cost_per_km)}/km`:" — no rate set"}` }))}
+              options={fleet.map(v=>{
+                const r = runningRateFor(v.id, costRows);
+                return { value:v.id, label:`${v.name}${r.rate!=null
+                  ? ` — ${fmtR(r.rate)}/km${r.basis==="fleet"?" (fleet avg)":""}`
+                  : " — no cost history yet"}` };
+              })}
               placeholder="Search vehicles…"/>
           </div>
           <div className="field"><label>Date</label>
@@ -3546,8 +3614,11 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
         {km>0 && (
           <div style={{fontSize:12,color:T.muted,marginTop:6}}>
             {fmtNum(km)} km
-            {estCost!=null ? <> · {fmtR(estCost)} at {fmtR(rate)}/km</>
-                           : <> · no rate set on this vehicle, so this trip carries no cost</>}
+            {estCost!=null
+              ? <> · {fmtR(estCost)} at {fmtR(rate)}/km{basis==="fleet"
+                  ? <span style={{color:T.warn}}> (fleet average — this vehicle has no cost history of its own yet)</span>
+                  : <span style={{color:T.muted}}> (from its own fuel, parts and repair history)</span>}</>
+              : <> · no vehicle in the fleet has enough cost history yet, so this trip carries no cost</>}
           </div>
         )}
 
