@@ -3185,6 +3185,113 @@ function OfflineStatus() {
   );
 }
 
+// Ported from the Maintenance app (2026-08-27) — Ops was the one app missed in
+// the 2026-08-25 searchable-dropdown rollout, and the Vehicle Log's job-card
+// picker is exactly the case it exists for: a list long enough that scrolling
+// it on a phone is worse than typing three letters.
+// Type-to-search dropdown (2026-08-25) — same value/onChange contract as a
+// plain <select> (value = selected option's `value`, onChange receives the
+// new value), but lets staff type a few letters to filter instead of
+// scrolling a long native list. Used for item/supplier/member-style
+// pickers with many options; short toggles/enums (job type, destination,
+// status, recurrence, unit) stay as plain <select>s since search doesn't
+// help there. `options` is [{ value, label }].
+const searchSelectInput = {width:"100%",background:"rgba(0,0,0,.25)",border:`1px solid ${T.border}`,borderRadius:6,
+  padding:"10px 11px",color:T.cream,fontFamily:"'Inter',sans-serif",fontSize:16,outline:"none"};
+
+function SearchableSelect({ value, onChange, options, placeholder = "Select…", style, inputStyle, disabled }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlight, setHighlight] = useState(0);
+  const wrapRef = useRef(null);
+
+  const selected = options.find((o) => o.value === value);
+  const q = query.trim().toLowerCase();
+  const filtered = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
+
+  useEffect(() => {
+    function onDocDown(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onDocDown);
+    return () => document.removeEventListener("mousedown", onDocDown);
+  }, []);
+
+  function choose(opt) {
+    onChange(opt.value);
+    setQuery("");
+    setOpen(false);
+  }
+
+  function handleKeyDown(e) {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "Enter") {
+        setOpen(true);
+        setHighlight(0);
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight((h) => Math.min(h + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((h) => Math.max(h - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (filtered[highlight]) choose(filtered[highlight]);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+    }
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", ...style }}>
+      <input
+        type="text"
+        style={inputStyle || searchSelectInput}
+        placeholder={selected && !open ? selected.label : placeholder}
+        value={open ? query : selected ? selected.label : ""}
+        onFocus={() => { setOpen(true); setQuery(""); setHighlight(0); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); setHighlight(0); }}
+        onKeyDown={handleKeyDown}
+        disabled={disabled}
+      />
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "100%", left: 0, right: 0, marginTop: 2, zIndex: 50,
+            background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8,
+            maxHeight: 220, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.35)",
+          }}
+        >
+          {filtered.length === 0 && (
+            <div style={{ padding: "7px 10px", fontSize: 12, color: T.muted }}>No matches</div>
+          )}
+          {filtered.map((o, i) => (
+            <div
+              key={o.value}
+              onMouseDown={(e) => { e.preventDefault(); choose(o); }}
+              onMouseEnter={() => setHighlight(i)}
+              style={{
+                padding: "7px 10px", fontSize: 13, cursor: "pointer", color: T.cream,
+                background: i === highlight ? "rgba(184,147,90,.14)" : "transparent",
+              }}
+            >
+              {o.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ─── VEHICLE REGISTER ───────────────────────────────────────────────────────
 // Trip log: who drove what, how far, and why (2026-08-27). Demo company only
 // for now, behind companies.vehicle_register_enabled.
@@ -3373,20 +3480,24 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
         <div className="section-title">Log a trip</div>
         <div className="grid2">
           <div className="field"><label>Vehicle</label>
-            <select value={form.vehicle_id} onChange={e=>pickVehicle(e.target.value)}>
-              <option value="">Select vehicle…</option>
-              {fleet.map(v=><option key={v.id} value={v.id}>{v.name}{v.cost_per_km!=null?` — ${fmtR(v.cost_per_km)}/km`:" — no rate set"}</option>)}
-            </select>
+            <SearchableSelect
+              value={form.vehicle_id}
+              onChange={pickVehicle}
+              options={fleet.map(v=>({ value:v.id,
+                label:`${v.name}${v.cost_per_km!=null?` — ${fmtR(v.cost_per_km)}/km`:" — no rate set"}` }))}
+              placeholder="Search vehicles…"/>
           </div>
           <div className="field"><label>Date</label>
             <input type="date" value={form.trip_date} onChange={e=>setForm(f=>({...f,trip_date:e.target.value}))}/></div>
 
           <div className="field"><label>Driver</label>
-            <select value={form.driver_employee_id} onChange={e=>setForm(f=>({...f,driver_employee_id:e.target.value}))}>
-              <option value="">— someone not on the staff list —</option>
-              {[...hrEmployees].sort((a,b)=>staffName(a).localeCompare(staffName(b)))
-                .map(e=><option key={e.id} value={e.id}>{staffName(e)}</option>)}
-            </select>
+            <SearchableSelect
+              value={form.driver_employee_id}
+              onChange={v=>setForm(f=>({...f,driver_employee_id:v}))}
+              options={[{ value:"", label:"— someone not on the staff list —" },
+                ...[...hrEmployees].sort((a,b)=>staffName(a).localeCompare(staffName(b)))
+                  .map(e=>({ value:e.id, label:staffName(e) }))]}
+              placeholder="Search staff…"/>
           </div>
           {!form.driver_employee_id && (
             <div className="field"><label>Driver name</label>
@@ -3402,10 +3513,12 @@ function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes,
           </div>
           {isMaintenanceTrip && (
             <div className="field"><label>Job card</label>
-              <select value={form.job_id} onChange={e=>setForm(f=>({...f,job_id:e.target.value}))}>
-                <option value="">Select job card…</option>
-                {(jobs||[]).map(j=><option key={j.id} value={j.id}>{j.name}{j.due_date?` — due ${j.due_date}`:""}</option>)}
-              </select>
+              <SearchableSelect
+                value={form.job_id}
+                onChange={v=>setForm(f=>({...f,job_id:v}))}
+                options={(jobs||[]).map(j=>({ value:j.id,
+                  label:`${j.name}${j.due_date?` — due ${j.due_date}`:""}${j.status==="completed"?" (completed)":""}` }))}
+                placeholder="Search job cards…"/>
             </div>
           )}
 
