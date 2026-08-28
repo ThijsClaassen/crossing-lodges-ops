@@ -1900,8 +1900,15 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
     } catch(e) { alert("Error removing: " + e.message); }
   };
 
-  const vehicles   = fleet.filter(v => v.category === "vehicle");
+  // Grouped so that EVERY fleet row lands somewhere (2026-08-27). This used to
+  // be `category === "vehicle"` vs `category === "equipment"`, which meant a row
+  // with any other category — Demo's seed used descriptive ones like "Game
+  // Drive Vehicle" — matched neither group and silently vanished from the only
+  // page that manages it, while still appearing in every dropdown. A vehicle
+  // being invisible on its own register is a bad failure, so equipment is now
+  // the explicit case and everything else is treated as a vehicle.
   const equipment  = fleet.filter(v => v.category === "equipment");
+  const vehicles   = fleet.filter(v => v.category !== "equipment");
 
   return (
     <>
