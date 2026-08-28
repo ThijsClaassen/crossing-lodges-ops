@@ -13,6 +13,7 @@ import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPu
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const fmtR = n => `R ${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtL = n => `${Number(n).toLocaleString()} L`;
+const fmtNum = n => Number(n || 0).toLocaleString("en-ZA", { maximumFractionDigits: 0 });
 const uid   = () => crypto.randomUUID();
 const round2 = n => Math.round((Number(n)||0)*100)/100;
 
@@ -1850,12 +1851,16 @@ function VehicleDetail({ vehicle, locData, onClose }) {
 }
 
 function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyId }) {
+  // Read the flag here rather than threading a prop down — the Running Cost
+  // field is the only part of this page that's Demo-gated.
+  const { vehicleRegisterEnabled } = useCompany();
   const [showForm, setShowForm] = useState(false);
   const [editEntry, setEditEntry] = useState(null);
   const [detailVehicle, setDetailVehicle] = useState(null);
   const BLANK_V = { name:"", id:"", category:"vehicle", fuel:"diesel",
     license_expiry:"", last_service_date:"", last_service_km:"",
     service_interval_months:"", service_interval_km:"",
+    cost_per_km:"",
     self_serviced:false, service_location_id:"" };
   const [form, setForm] = useState(BLANK_V);
 
@@ -2011,6 +2016,19 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
                   onChange={e=>setForm(f=>({...f,service_interval_km:e.target.value}))}/>
               </div>
             </div>
+
+            {vehicleRegisterEnabled && (
+              <div className="field" style={{marginBottom:6}}>
+                <label>Running Cost (R per km)</label>
+                <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="e.g. 4.50"
+                  value={form.cost_per_km ?? ""} onChange={e=>setForm(f=>({...f,cost_per_km:e.target.value}))}/>
+                <div style={{fontSize:11,color:T.muted,marginTop:4}}>
+                  What a kilometre in this vehicle costs you all-in — fuel, tyres, wear. Used to put a value on
+                  trips in the Vehicle Log, and to bill maintenance trips to their job card. Leave blank and the
+                  vehicle's trips still record km, they just carry no cost.
+                </div>
+              </div>
+            )}
 
             <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:7,padding:"12px 13px",marginBottom:6}}>
               <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:form.self_serviced?12:0}}>
@@ -2395,6 +2413,7 @@ const PAGES = [
   { id:"petrol",    label:"Petrol",        section:"Fuel",       adminOnly:false },
   { id:"parts",     label:"Parts & Stock", section:"Mechanical", adminOnly:false },
   { id:"repairs",   label:"Repairs",       section:"Mechanical", adminOnly:false },
+  { id:"vehicles",  label:"Vehicle Log",   section:"Mechanical", adminOnly:false, flag:"vehicleRegister" },
   { id:"fleet",     label:"Fleet",         section:"Management", adminOnly:true  },
   { id:"costs",     label:"Cost Summary",  section:"Reports",    adminOnly:true  },
 ];
@@ -2474,6 +2493,7 @@ const fleetRow = v => ({
   service_interval_km:     v.service_interval_km === "" || v.service_interval_km == null ? null : Number(v.service_interval_km),
   self_serviced:           !!v.self_serviced,
   service_location_id:     v.self_serviced ? (v.service_location_id || null) : null,
+  cost_per_km:             v.cost_per_km === "" || v.cost_per_km == null ? null : Number(v.cost_per_km),
 });
 
 const sbFleet = {
@@ -2618,6 +2638,7 @@ function AuthenticatedApp() {
     role,
     switchCompany,
     memberBillingEnabled,
+    vehicleRegisterEnabled,
   } = useCompany();
 
   const [page,    setPage]    = useState("dashboard");
@@ -2634,7 +2655,15 @@ function AuthenticatedApp() {
   const [showMemberPurchase, setShowMemberPurchase] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [fleet,   setFleet]   = useState([]);
-  const [locData, setLocData] = useState({ ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() });
+  // Same reason as `nd` inside loadAll: seeded empty rather than with three
+  // hardcoded lodge ids, now that the lodge list comes from the database.
+  const [locData, setLocData] = useState({});
+  // Vehicle Register (2026-08-27) — company-wide like fleet, since vehicles
+  // move between lodges; the page filters by lodge itself.
+  const [vehicleTrips, setVehicleTrips] = useState([]);
+  const [tripPurposes, setTripPurposes] = useState([]);
+  const [hrEmployees, setHrEmployees] = useState([]);
+  const [vehicleJobs, setVehicleJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState(null);
   const [serviceJobs, setServiceJobs] = useState({});
@@ -2661,7 +2690,8 @@ function AuthenticatedApp() {
     setLoading(true); setLoadErr(null);
     try {
       const cf = `company_id=eq.${companyId}`;
-      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows,partCnRows] = await Promise.all([
+      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows,partCnRows,
+             tripRows,purposeRows,hrEmpRows,vehicleJobRows] = await Promise.all([
         sb.select("fleet", cf),
         sb.select("diesel_deliveries", cf),
         sb.select("diesel_issues", cf),
@@ -2676,6 +2706,17 @@ function AuthenticatedApp() {
         sb.select("repairs", cf),
         sb.select("purchase_slips", `app=eq.ops&${cf}`),
         sb.select("supplier_credit_notes", `app=eq.ops&${cf}`),
+        // Vehicle Register (2026-08-27). Wrapped in .catch(()=>[]) so an Ops
+        // app pointed at a company that hasn't had the SQL run yet still
+        // loads everything else instead of failing wholesale — same guard
+        // used for the invoicing tables in Maintenance.
+        sb.select("vehicle_trips", cf).catch(()=>[]),
+        sb.select("vehicle_trip_purposes", `${cf}&active=eq.true`).catch(()=>[]),
+        // Drivers come from HR (cross-app read, same Supabase project) so the
+        // dropdown holds real staff names rather than free text that drifts.
+        sb.select("hr_employees", `active=eq.true&${cf}`).catch(()=>[]),
+        // Open job cards, for attaching a maintenance trip to one.
+        sb.select("maint_jobs", `${cf}&status=in.(scheduled,in_progress,completed)`).catch(()=>[]),
       ]);
       const slipMap={}; (slipRows||[]).forEach(s=>{slipMap[s.id]=s;});
       setSlips(slipMap);
@@ -2689,9 +2730,26 @@ function AuthenticatedApp() {
         service_interval_km:     r.service_interval_km == null ? null : +r.service_interval_km,
         self_serviced:           !!r.self_serviced,
         service_location_id:     r.service_location_id || "",
+        cost_per_km:             r.cost_per_km == null ? null : +r.cost_per_km,
       })));
 
-      const nd = { ZC:emptyLoc(), EC:emptyLoc(), SC:emptyLoc() };
+      // Vehicle Register (2026-08-27)
+      setVehicleTrips((tripRows||[]).map(r=>({
+        ...r,
+        start_km:+r.start_km, end_km:+r.end_km, km:+r.km,
+        cost_per_km: r.cost_per_km==null?null:+r.cost_per_km,
+        trip_cost: r.trip_cost==null?0:+r.trip_cost,
+      })));
+      setTripPurposes((purposeRows||[]).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)));
+      setHrEmployees(hrEmpRows||[]);
+      setVehicleJobs(vehicleJobRows||[]);
+
+      // Built from LOCATIONS rather than a hardcoded {ZC,EC,SC} (2026-08-27).
+      // Since lodges became dynamic, a company whose lodge ids aren't exactly
+      // those three would hit `nd[lid]` as undefined on the very next line and
+      // crash the whole load. Seeding from the real list can't drift.
+      const nd = {};
+      LOCATIONS.forEach(l => { nd[l.id] = emptyLoc(); });
       LOCATIONS.forEach(l => {
         const lid = l.id;
         nd[lid].dieselDeliveries = dDel.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,pricePerLitre:+r.price_per_litre,supplier:r.supplier||"",invoiceNo:r.invoice_no||"",notes:r.notes||"",slipId:r.slip_id||null}));
@@ -2746,7 +2804,10 @@ function AuthenticatedApp() {
     setFleet(prev => typeof updater==="function" ? updater(prev) : updater);
   }, []);
 
-  const visiblePages = PAGES.filter(p => isAdmin || !p.adminOnly);
+  // `flag` gates a page on a per-company feature flag (Vehicle Log is Demo-only
+  // while it's being trialled). A page with no flag behaves exactly as before.
+  const featureFlags = { vehicleRegister: vehicleRegisterEnabled };
+  const visiblePages = PAGES.filter(p => (isAdmin || !p.adminOnly) && (!p.flag || featureFlags[p.flag]));
   const sections  = [...new Set(visiblePages.map(p=>p.section))];
   const current   = PAGES.find(p=>p.id===page);
   const locColor  = LOC_COLORS[locId];
@@ -2969,6 +3030,11 @@ function AuthenticatedApp() {
             {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
+            {page==="vehicles"  && vehicleRegisterEnabled && <VehicleRegister
+                                    locId={locId} fleet={fleet} trips={vehicleTrips} setTrips={setVehicleTrips}
+                                    purposes={tripPurposes} setPurposes={setTripPurposes}
+                                    hrEmployees={hrEmployees} jobs={vehicleJobs}
+                                    isAdmin={isAdmin} companyId={companyId}/>}
             {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData} serviceJobs={serviceJobs} companyId={companyId}/>}
             {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet} serviceJobs={serviceJobs}/>}
             {!isAdmin && (page==="dashboard"||page==="fleet"||page==="costs") && (
@@ -3110,6 +3176,316 @@ function OfflineStatus() {
           )}
         </div>
       </>)}
+    </div>
+  );
+}
+
+// ─── VEHICLE REGISTER ───────────────────────────────────────────────────────
+// Trip log: who drove what, how far, and why (2026-08-27). Demo company only
+// for now, behind companies.vehicle_register_enabled.
+//
+// Distance is entered as START and END odometer rather than a km figure —
+// harder to fudge, and it means each vehicle always has a current reading,
+// which is what makes the Fleet page's existing "service due by km" alerts
+// meaningful (before this there was nothing current to compare against).
+//
+// A trip whose purpose is flagged is_maintenance can be attached to a job
+// card. The Maintenance app's Internal Billing then adds that trip's cost to
+// the job alongside labour and materials — which was the point of the whole
+// exercise: internal invoices that carry the real vehicle cost of getting
+// someone to the job, not just their time and parts.
+function VehicleRegister({ locId, fleet, trips, setTrips, purposes, setPurposes, hrEmployees, jobs, isAdmin, companyId }) {
+  const blank = { vehicle_id:"", trip_date:today(), driver_employee_id:"", driver_name:"",
+                  purpose_id:"", start_km:"", end_km:"", job_id:"", notes:"" };
+  const [form, setForm] = useState(blank);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [showPurposes, setShowPurposes] = useState(false);
+  const [locFilter, setLocFilter] = useState(locId);
+
+  useEffect(()=>{ setLocFilter(locId); },[locId]);
+
+  // km and trip_cost are GENERATED columns in Postgres, so a trip created
+  // offline (queued, not yet synced) has neither until it reaches the server.
+  // Deriving them here means an offline-logged trip still shows its real
+  // distance and cost instead of a misleading 0.
+  const tripKm   = t => t.km != null ? t.km : (Number(t.end_km||0) - Number(t.start_km||0));
+  const tripCost = t => t.trip_cost != null ? t.trip_cost : tripKm(t) * Number(t.cost_per_km||0);
+
+  const vehicleById = useMemo(()=>Object.fromEntries(fleet.map(v=>[v.id,v])),[fleet]);
+  const purposeById = useMemo(()=>Object.fromEntries(purposes.map(p=>[p.id,p])),[purposes]);
+  const jobById     = useMemo(()=>Object.fromEntries((jobs||[]).map(j=>[j.id,j])),[jobs]);
+
+  // Last odometer reading we've seen for each vehicle — used to prefill the
+  // start reading and to warn if someone types one that goes backwards.
+  const lastKmByVehicle = useMemo(()=>{
+    const m = {};
+    for (const t of trips) {
+      if (!m[t.vehicle_id] || Number(t.end_km) > m[t.vehicle_id]) m[t.vehicle_id] = Number(t.end_km);
+    }
+    return m;
+  },[trips]);
+
+  const visible = useMemo(()=>
+    trips.filter(t=>locFilter==="all"||t.location_id===locFilter)
+         .sort((a,b)=>(b.trip_date||"").localeCompare(a.trip_date||"")||(b.created_at||"").localeCompare(a.created_at||"")),
+  [trips, locFilter]);
+
+  const selectedPurpose = purposeById[form.purpose_id];
+  const isMaintenanceTrip = !!selectedPurpose?.is_maintenance;
+
+  const km = (parseFloat(form.end_km)||0) - (parseFloat(form.start_km)||0);
+  const rate = vehicleById[form.vehicle_id]?.cost_per_km;
+  const estCost = rate == null ? null : km * rate;
+
+  function pickVehicle(id) {
+    // Prefill the start reading from wherever that vehicle was last left —
+    // saves typing and makes a gap in the log obvious.
+    const last = lastKmByVehicle[id];
+    setForm(f=>({...f, vehicle_id:id, start_km: last!=null?String(last):f.start_km }));
+  }
+
+  async function save() {
+    setErr("");
+    if(!form.vehicle_id) return setErr("Pick a vehicle.");
+    if(!form.purpose_id) return setErr("Pick what the trip was for.");
+    const driver = form.driver_employee_id
+      ? (hrEmployees.find(e=>e.id===form.driver_employee_id)?.name || "")
+      : form.driver_name.trim();
+    if(!driver) return setErr("Say who was driving.");
+    const s = parseFloat(form.start_km), e = parseFloat(form.end_km);
+    if(!(s>=0) || !(e>=0)) return setErr("Both odometer readings are needed.");
+    if(e < s) return setErr("The closing reading can't be lower than the opening one.");
+    if(isMaintenanceTrip && !form.job_id) return setErr("Pick the job card this trip was for, so its cost lands on the right job.");
+
+    setSaving(true);
+    try {
+      const row = {
+        id: uid(), company_id: companyId, location_id: locFilter==="all"?locId:locFilter,
+        vehicle_id: form.vehicle_id, purpose_id: form.purpose_id,
+        trip_date: form.trip_date,
+        driver_name: driver,
+        driver_employee_id: form.driver_employee_id || null,
+        start_km: s, end_km: e,
+        job_id: isMaintenanceTrip ? (form.job_id || null) : null,
+        // Snapshot the rate in force now. Changing a vehicle's rate later must
+        // not silently restate trips that have already been invoiced.
+        cost_per_km: vehicleById[form.vehicle_id]?.cost_per_km ?? null,
+        notes: form.notes.trim() || null,
+      };
+      await sb.insert("vehicle_trips", row);
+      // km/trip_cost are generated in the database; mirror them locally so the
+      // row renders correctly without waiting for a reload.
+      setTrips(p=>[...p, {...row, km: e-s, trip_cost: (row.cost_per_km||0)*(e-s)}]);
+      setForm({...blank, trip_date:form.trip_date});
+      setShowForm(false);
+    } catch(ex) { setErr(ex.message); }
+    finally { setSaving(false); }
+  }
+
+  async function remove(t) {
+    if(!window.confirm(`Delete the trip on ${t.trip_date} (${fmtNum(tripKm(t))} km)?`)) return;
+    try {
+      await sb.delete("vehicle_trips", t.id);
+      setTrips(p=>p.filter(x=>x.id!==t.id));
+    } catch(ex){ alert("Error: "+ex.message); }
+  }
+
+  const monthKm = visible.filter(t=>(t.trip_date||"").slice(0,7)===new Date().toISOString().slice(0,7));
+  const totalKm = monthKm.reduce((s,t)=>s+tripKm(t),0);
+  const totalCost = monthKm.reduce((s,t)=>s+tripCost(t),0);
+  const maintKm = monthKm.filter(t=>t.job_id).reduce((s,t)=>s+tripKm(t),0);
+
+  return (<>
+    <div className="strip" style={{marginBottom:14}}>
+      <div className="strip-item"><div className="strip-label">This Month — KM</div>
+        <div className="strip-val">{fmtNum(totalKm)}</div></div>
+      <div className="strip-item"><div className="strip-label">This Month — Cost</div>
+        <div className="strip-val" style={{color:T.gold}}>{fmtR(totalCost)}</div>
+        <div style={{fontSize:10,color:T.muted,marginTop:2}}>Vehicles with no rate set count as R0</div></div>
+      <div className="strip-item"><div className="strip-label">On Job Cards</div>
+        <div className="strip-val">{fmtNum(maintKm)}</div>
+        <div style={{fontSize:10,color:T.muted,marginTop:2}}>Billed to Maintenance jobs</div></div>
+      <div className="strip-item"><div className="strip-label">Trips Logged</div>
+        <div className="strip-val">{visible.length}</div></div>
+    </div>
+
+    <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+      <select value={locFilter} onChange={e=>setLocFilter(e.target.value)}
+        style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
+                fontFamily:"'Space Mono'",fontSize:13,padding:"6px 10px"}}>
+        <option value="all">All lodges</option>
+        {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+      </select>
+      <button className="btn" onClick={()=>setShowForm(v=>!v)}>{showForm?"Cancel":"+ Log a trip"}</button>
+      {isAdmin && <button className="btn btn-ghost" onClick={()=>setShowPurposes(v=>!v)}>
+        {showPurposes?"Hide categories":"Edit categories"}
+      </button>}
+    </div>
+
+    {showPurposes && isAdmin && (
+      <TripPurposeManager purposes={purposes} setPurposes={setPurposes} companyId={companyId}/>
+    )}
+
+    {showForm && (
+      <div className="section" style={{marginBottom:14}}>
+        <div className="section-title">Log a trip</div>
+        <div className="grid2">
+          <div className="field"><label>Vehicle</label>
+            <select value={form.vehicle_id} onChange={e=>pickVehicle(e.target.value)}>
+              <option value="">Select vehicle…</option>
+              {fleet.map(v=><option key={v.id} value={v.id}>{v.name}{v.cost_per_km!=null?` — ${fmtR(v.cost_per_km)}/km`:" — no rate set"}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>Date</label>
+            <input type="date" value={form.trip_date} onChange={e=>setForm(f=>({...f,trip_date:e.target.value}))}/></div>
+
+          <div className="field"><label>Driver</label>
+            <select value={form.driver_employee_id} onChange={e=>setForm(f=>({...f,driver_employee_id:e.target.value}))}>
+              <option value="">— someone not on the staff list —</option>
+              {hrEmployees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </div>
+          {!form.driver_employee_id && (
+            <div className="field"><label>Driver name</label>
+              <input value={form.driver_name} onChange={e=>setForm(f=>({...f,driver_name:e.target.value}))}
+                placeholder="e.g. guest, contractor"/></div>
+          )}
+
+          <div className="field"><label>Purpose</label>
+            <select value={form.purpose_id} onChange={e=>setForm(f=>({...f,purpose_id:e.target.value,job_id:""}))}>
+              <option value="">Select purpose…</option>
+              {purposes.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          {isMaintenanceTrip && (
+            <div className="field"><label>Job card</label>
+              <select value={form.job_id} onChange={e=>setForm(f=>({...f,job_id:e.target.value}))}>
+                <option value="">Select job card…</option>
+                {(jobs||[]).map(j=><option key={j.id} value={j.id}>{j.name}{j.due_date?` — due ${j.due_date}`:""}</option>)}
+              </select>
+            </div>
+          )}
+
+          <div className="field"><label>Odometer — start</label>
+            <input type="number" inputMode="decimal" value={form.start_km}
+              onChange={e=>setForm(f=>({...f,start_km:e.target.value}))}/></div>
+          <div className="field"><label>Odometer — end</label>
+            <input type="number" inputMode="decimal" value={form.end_km}
+              onChange={e=>setForm(f=>({...f,end_km:e.target.value}))}/></div>
+        </div>
+
+        {form.vehicle_id && lastKmByVehicle[form.vehicle_id]!=null && parseFloat(form.start_km) < lastKmByVehicle[form.vehicle_id] && (
+          <div style={{fontSize:12,color:T.warn,marginTop:6}}>
+            &#9888; This vehicle was last left at {fmtNum(lastKmByVehicle[form.vehicle_id])} km. A lower opening
+            reading usually means a trip wasn't logged, or a digit slipped.
+          </div>
+        )}
+        {km>0 && (
+          <div style={{fontSize:12,color:T.muted,marginTop:6}}>
+            {fmtNum(km)} km
+            {estCost!=null ? <> · {fmtR(estCost)} at {fmtR(rate)}/km</>
+                           : <> · no rate set on this vehicle, so this trip carries no cost</>}
+          </div>
+        )}
+
+        <div className="field" style={{marginTop:8}}><label>Notes (optional)</label>
+          <input value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/></div>
+
+        {err && <div style={{fontSize:12,color:T.danger,marginTop:8}}>{err}</div>}
+        <button className="btn" style={{marginTop:10}} disabled={saving} onClick={save}>
+          {saving?"Saving…":"Save trip"}
+        </button>
+      </div>
+    )}
+
+    <div className="tbl-wrap"><table className="tbl">
+      <thead><tr>
+        <th>Date</th><th>Vehicle</th><th>Driver</th><th>Purpose</th>
+        <th className="num">Start</th><th className="num">End</th><th className="num">KM</th>
+        <th className="num">Cost</th><th>Job card</th><th></th>
+      </tr></thead>
+      <tbody>
+        {visible.map(t=>(
+          <tr key={t.id}>
+            <td className="mono" style={{fontSize:11}}>{t.trip_date}</td>
+            <td style={{fontWeight:600}}>{vehicleById[t.vehicle_id]?.name||"—"}</td>
+            <td style={{fontSize:12}}>{t.driver_name}</td>
+            <td style={{fontSize:12,color:T.muted}}>{purposeById[t.purpose_id]?.name||"—"}</td>
+            <td className="num" style={{color:T.muted,fontSize:11}}>{fmtNum(t.start_km)}</td>
+            <td className="num" style={{color:T.muted,fontSize:11}}>{fmtNum(t.end_km)}</td>
+            <td className="num" style={{fontWeight:600}}>{fmtNum(tripKm(t))}</td>
+            <td className="num" style={{color:tripCost(t)?T.gold:T.border}}>{tripCost(t)?fmtR(tripCost(t)):"—"}</td>
+            <td style={{fontSize:11,color:T.muted}}>{t.job_id?(jobById[t.job_id]?.name||"linked"):"—"}</td>
+            <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(t)}>x</button>}</td>
+          </tr>
+        ))}
+        {visible.length===0 && <tr><td colSpan={10} className="empty">No trips logged yet.</td></tr>}
+      </tbody>
+    </table></div>
+  </>);
+}
+
+// Category list is data, not code — Thijs asked for "an option to add
+// categories". is_maintenance is a flag rather than a name match, so a company
+// can rename it or add a second maintenance-type purpose without a code change.
+function TripPurposeManager({ purposes, setPurposes, companyId }) {
+  const [name, setName] = useState("");
+  const [isMaint, setIsMaint] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function add() {
+    const n = name.trim();
+    if(!n) return;
+    if(purposes.some(p=>p.name.toLowerCase()===n.toLowerCase())) { alert("That category already exists."); return; }
+    setSaving(true);
+    try {
+      const row = { id: uid(), company_id: companyId, name: n, is_maintenance: isMaint,
+                    active: true, sort_order: (purposes.length?Math.max(...purposes.map(p=>p.sort_order||0)):0)+1 };
+      await sb.insert("vehicle_trip_purposes", row);
+      setPurposes(p=>[...p, row]);
+      setName(""); setIsMaint(false);
+    } catch(e){ alert("Could not add: "+e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function deactivate(p) {
+    if(!window.confirm(`Remove "${p.name}"? Trips already logged against it keep their category.`)) return;
+    try {
+      await sb.patch("vehicle_trip_purposes", p.id, { active:false });
+      setPurposes(list=>list.filter(x=>x.id!==p.id));
+    } catch(e){ alert("Error: "+e.message); }
+  }
+
+  return (
+    <div className="section" style={{marginBottom:14}}>
+      <div className="section-title">Trip categories</div>
+      <div style={{fontSize:12,color:T.muted,marginBottom:10}}>
+        Tick "counts as maintenance" for any category whose trips should be attachable to a job card
+        and billed to that job. Removing a category hides it from the dropdown; trips already logged
+        against it keep it.
+      </div>
+      {purposes.map(p=>(
+        <div key={p.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+          padding:"6px 0",borderTop:`1px solid ${T.border}`}}>
+          <div>
+            <span style={{fontWeight:600}}>{p.name}</span>
+            {p.is_maintenance && <span className="badge" style={{marginLeft:8,background:`${T.gold}22`,color:T.gold,border:`1px solid ${T.gold}55`}}>counts as maintenance</span>}
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={()=>deactivate(p)}>Remove</button>
+        </div>
+      ))}
+      <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="New category name"
+          style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
+                  fontFamily:"'Space Mono'",fontSize:13,padding:"6px 10px",flex:1,minWidth:160}}/>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:T.muted}}>
+          <input type="checkbox" checked={isMaint} onChange={e=>setIsMaint(e.target.checked)}/>
+          counts as maintenance
+        </label>
+        <button className="btn" disabled={saving||!name.trim()} onClick={add}>{saving?"Adding…":"Add"}</button>
+      </div>
     </div>
   );
 }
