@@ -1865,7 +1865,7 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
   const BLANK_V = { name:"", id:"", category:"vehicle", fuel:"diesel",
     license_expiry:"", last_service_date:"", last_service_km:"",
     service_interval_months:"", service_interval_km:"",
-    cost_per_km:"",
+    cost_per_km:"", insurance_monthly:"",
     self_serviced:false, service_location_id:"" };
   const [form, setForm] = useState(BLANK_V);
 
@@ -2029,6 +2029,18 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
               </div>
             </div>
 
+            <div className="field" style={{marginBottom:6}}>
+              <label>Insurance Premium (R per month)</label>
+              <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="e.g. 1250.00"
+                value={form.insurance_monthly ?? ""} onChange={e=>setForm(f=>({...f,insurance_monthly:e.target.value}))}/>
+              <div style={{fontSize:11,color:T.muted,marginTop:4}}>
+                What this vehicle costs to insure each month. Unlike fuel and repairs there's no transaction to
+                read it from, so it has to be entered here — it then feeds into the vehicle's cost per km on the
+                Cost Summary, and into what maintenance trips are charged. Leave blank if it isn't insured
+                separately.
+              </div>
+            </div>
+
 
             <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:7,padding:"12px 13px",marginBottom:6}}>
               <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:form.self_serviced?12:0}}>
@@ -2115,13 +2127,43 @@ export function fuelPricesFrom(locData, locIds) {
 }
 
 // inMonth: null for lifetime, or (dateStr) => boolean for a single month.
-export function computeVehicleCosts({ locData, fleet, locIds, inMonth = null }) {
+// locIds: the lodges being shown. allLocIds: every lodge, used to work out a
+// vehicle's total usage so insurance can be split fairly (see below).
+export function computeVehicleCosts({ locData, fleet, locIds, inMonth = null, allLocIds = null }) {
   const price = fuelPricesFrom(locData, locIds);
+  const everyLoc = allLocIds || locIds;
   const m = {};
   (fleet||[]).forEach(v => {
-    m[v.id] = { fuel:0, parts:0, repairs:0, name:v.name, fuel_type:v.fuel, category:v.category, odomReadings:[] };
+    m[v.id] = {
+      fuel:0, parts:0, repairs:0, name:v.name, fuel_type:v.fuel, category:v.category,
+      insurance_monthly: v.insurance_monthly == null ? null : Number(v.insurance_monthly),
+      odomReadings:[],           // readings within the lodges being shown
+      readingsByLoc:{},          // every lodge, for the insurance split
+      firstSeen:null,            // earliest activity anywhere, for months elapsed
+    };
   });
 
+  // Pass 1 — every lodge. Needed for the insurance share and the start date,
+  // both of which are properties of the vehicle rather than of the view.
+  everyLoc.forEach(lid => {
+    const loc = locData?.[lid];
+    if (!loc) return;
+    const noteDate = (v, dateStr) => {
+      const d = parseDMY(dateStr);
+      if (!d) return;
+      if (!m[v].firstSeen || d < m[v].firstSeen) m[v].firstSeen = d;
+    };
+    const noteKm = (v, mileage) => {
+      const km = parseFloat(mileage);
+      if (isNaN(km) || km <= 0) return;
+      (m[v].readingsByLoc[lid] ||= []).push(km);
+    };
+    loc.dieselIssues.forEach(e => { if (e.vehicle && m[e.vehicle]) { noteDate(e.vehicle, e.date); noteKm(e.vehicle, e.mileage); } });
+    loc.petrolIssues.forEach(e => { if (e.vehicle && m[e.vehicle]) { noteDate(e.vehicle, e.date); noteKm(e.vehicle, e.mileage); } });
+    loc.repairs.forEach(e => { if (m[e.vehicle]) noteDate(e.vehicle, e.date); });
+  });
+
+  // Pass 2 — only the lodges being shown. Spend and km for the visible view.
   locIds.forEach(lid => {
     const loc = locData?.[lid];
     if (!loc) return;
@@ -2155,12 +2197,43 @@ export function computeVehicleCosts({ locData, fleet, locIds, inMonth = null }) 
     });
   });
 
+  const spread = arr => (arr && arr.length >= 2) ? Math.max(...arr) - Math.min(...arr) : 0;
+  const now = new Date();
+
   return Object.entries(m).map(([id, d]) => {
-    const total = d.fuel + d.parts + d.repairs;
+    // --- Insurance (2026-08-27) -----------------------------------------
+    // A monthly premium, so it has to be multiplied by a number of months.
+    // Lifetime counts every month since the vehicle's FIRST record up to
+    // today — insurance accrues whether the vehicle moves or not, so a bakkie
+    // parked for three months still carries three months of premium. A month
+    // view counts exactly one.
+    //
+    // Split across lodges by share of kilometres, since a premium belongs to
+    // the vehicle rather than to any one lodge: viewing a single lodge shows
+    // only the portion matching the km it drove. Note the share uses each
+    // lodge's own reading spread, which double-counts where trips overlap —
+    // it's a weighting, not an exact apportionment, and the all-lodges view
+    // (which is what trip costing uses) always comes to the full premium.
+    let insurance = 0;
+    if (d.insurance_monthly > 0) {
+      const months = inMonth
+        ? 1
+        : (d.firstSeen
+            ? Math.max(1, (now.getFullYear()-d.firstSeen.getFullYear())*12 + (now.getMonth()-d.firstSeen.getMonth()) + 1)
+            : 0);
+      const kmShown = locIds.reduce((s,lid)=>s+spread(d.readingsByLoc[lid]), 0);
+      const kmEvery = everyLoc.reduce((s,lid)=>s+spread(d.readingsByLoc[lid]), 0);
+      const share = kmEvery > 0
+        ? kmShown / kmEvery
+        : (locIds.length >= everyLoc.length ? 1 : 0);  // no km anywhere: only count it in the full view
+      insurance = d.insurance_monthly * months * share;
+    }
+
+    const total = d.fuel + d.parts + d.repairs + insurance;
     const readings = d.odomReadings;
     const kmDriven = readings.length >= 2 ? Math.max(...readings) - Math.min(...readings) : null;
     const costPerKm = kmDriven && kmDriven > 0 ? total / kmDriven : null;
-    return { id, ...d, total, kmDriven, costPerKm };
+    return { id, ...d, insurance, total, kmDriven, costPerKm };
   })
   .filter(r => r.total > 0)
   .sort((a, b) => b.total - a.total);
@@ -2193,7 +2266,11 @@ function CostSummary({ locData, fleet, serviceJobs }) {
   // the old hardcoded R20.50/R21.50 — so these figures may differ slightly
   // from what this page showed before, and are closer to the truth for it.
   const price = useMemo(()=>fuelPricesFrom(locData, locsToShow), [locData, viewLoc]);
-  const computeCosts = (inMonth) => computeVehicleCosts({ locData, fleet, locIds: locsToShow, inMonth });
+  // allLocIds is every lodge regardless of the filter — the insurance split
+  // needs a vehicle's total usage to work out this lodge's share of it.
+  const computeCosts = (inMonth) => computeVehicleCosts({
+    locData, fleet, locIds: locsToShow, allLocIds: LOCATIONS.map(l=>l.id), inMonth,
+  });
 
   // ── LIFETIME ──
   const lifetime = useMemo(() => computeCosts(null), [locData, fleet, viewLoc]);
@@ -2556,6 +2633,7 @@ const fleetRow = v => ({
   self_serviced:           !!v.self_serviced,
   service_location_id:     v.self_serviced ? (v.service_location_id || null) : null,
   cost_per_km:             v.cost_per_km === "" || v.cost_per_km == null ? null : Number(v.cost_per_km),
+  insurance_monthly:       v.insurance_monthly === "" || v.insurance_monthly == null ? null : Number(v.insurance_monthly),
 });
 
 const sbFleet = {
@@ -2793,6 +2871,7 @@ function AuthenticatedApp() {
         self_serviced:           !!r.self_serviced,
         service_location_id:     r.service_location_id || "",
         cost_per_km:             r.cost_per_km == null ? null : +r.cost_per_km,
+        insurance_monthly:       r.insurance_monthly == null ? null : +r.insurance_monthly,
       })));
 
       // Vehicle Register (2026-08-27)
