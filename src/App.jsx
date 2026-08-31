@@ -328,7 +328,12 @@ function FuelTransfers({ domain, locId, companyId, transfers, litresOnHand, onCh
   }
 
   return (
-    <div className="card" style={{marginTop:14}}>
+    <div className="card" style={{marginTop:26, borderTop:`2px solid ${T.border||"#3A3850"}`, paddingTop:16}}>
+      {/* Heavier top margin and a rule above it: without these it butted
+          straight onto the deliveries card and read as one continuous form. */}
+      <div style={{fontSize:11,letterSpacing:.8,textTransform:"uppercase",color:T.muted,marginBottom:6}}>
+        Between lodges
+      </div>
       <div className="card-title">Transfer fuel to another lodge</div>
       <div style={{fontSize:12,color:T.muted,marginBottom:10}}>
         Use this instead of issuing to a vehicle. A transfer never counts as usage and never
@@ -546,7 +551,11 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
                   <td className="num mono">{i.open}</td>
                   <td className="num mono">{i.close}</td>
                   <td className="num" style={{color:T.fuel_d,fontWeight:700}}>{i.litres}</td>
-                  <td>{i.vehicle?<span className="badge badge-d">{i.vehicle}</span>:<span style={{color:T.muted,fontSize:11}}>Unallocated</span>}</td>
+                  <td>{i.vehicle
+                    ? (fleet.find(v=>v.id===i.vehicle)
+                        ? <span className="badge badge-d">{fleet.find(v=>v.id===i.vehicle).name}</span>
+                        : <span className="badge badge-d" title={i.vehicle} style={{opacity:.7}}>Unknown vehicle</span>)
+                    : <span style={{color:T.muted,fontSize:11}}>Unallocated</span>}</td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{i.mileage||"—"}</td>
                   <td style={{fontSize:12,color:T.muted}}>{i.notes}</td>
                   <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({dieselIssues:issues.filter(x=>x.id!==i.id)})}>x</button>}</td>
@@ -732,6 +741,11 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
                   <option value="">— Unallocated —</option>
                   {dieselFleet.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
+                {dieselFleet.length===0 && (
+                  <div style={{fontSize:11,color:T.danger,marginTop:3}}>
+                    No vehicle is set to diesel — set the fuel type on the Fleet page.
+                  </div>
+                )}
               </div>
               <div className="field"><label>Opening Meter</label><input type="number" inputMode="decimal" value={iForm.open} onChange={e=>setIForm(f=>({...f,open:e.target.value}))}/></div>
               <div className="field"><label>Closing Meter</label><input type="number" inputMode="decimal" value={iForm.close} onChange={e=>setIForm(f=>({...f,close:e.target.value,litres:String((parseFloat(e.target.value)||0)-(parseFloat(f.open)||0))}))}/></div>
@@ -764,11 +778,14 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
         </div>
       )}
 
-      {/* Transfers sit below the tabs rather than inside one, so the
-          option is visible from every fuel view — the whole reason it
-          exists is that people were reaching for the wrong tool. */}
-      <FuelTransfers domain="diesel" locId={locId} companyId={companyId}
-        transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
+      {/* Gated to the purchases/deliveries tab only. It first rendered under
+          every tab, which made it read as an extension of whichever screen
+          you happened to be on rather than its own thing. A transfer is a
+          way fuel ARRIVES or LEAVES, so it belongs with deliveries. */}
+      {tab==="deliveries" && (
+        <FuelTransfers domain="diesel" locId={locId} companyId={companyId}
+          transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
+      )}
     </>
   );
 }
@@ -856,7 +873,17 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                 <tr key={i.id}>
                   <td className="mono" style={{fontSize:12}}>{i.date}</td>
                   <td className="num" style={{color:T.fuel_p,fontWeight:700}}>{Math.abs(i.litres)}</td>
-                  <td>{i.vehicle?<span className="badge badge-p">{i.vehicle}</span>:<span style={{color:T.muted,fontSize:11}}>Unallocated</span>}</td>
+                  <td>{i.vehicle
+                    /* Show the vehicle's NAME, not its raw id. The summary
+                       panel below already did this; this table did not, so a
+                       fleet row whose id is a UUID (anything created from a
+                       seed rather than typed by hand) rendered as a meaningless
+                       string that reads exactly like "not linked". If the id
+                       matches nothing, say so plainly instead of printing it. */
+                    ? (fleet.find(v=>v.id===i.vehicle)
+                        ? <span className="badge badge-p">{fleet.find(v=>v.id===i.vehicle).name}</span>
+                        : <span className="badge badge-p" title={i.vehicle} style={{opacity:.7}}>Unknown vehicle</span>)
+                    : <span style={{color:T.muted,fontSize:11}}>Unallocated</span>}</td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{i.mileage||"—"}</td>
                   <td style={{fontSize:12,color:T.muted}}>{i.notes}</td>
                   <td><button className="btn btn-danger btn-sm" onClick={()=>upd({petrolIssues:issues.filter(x=>x.id!==i.id)})}>x</button></td>
@@ -1024,6 +1051,18 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                   <option value="">— Unallocated —</option>
                   {petrolFleet.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
+                {/* An empty list is silent otherwise: staff see only
+                    "Unallocated", pick it because there is nothing else, and
+                    it reads as sloppiness. This list is fleet filtered to
+                    fuel === "petrol" — and fleet is COMPANY-WIDE, with no
+                    location_id column, so an empty list means no vehicle
+                    anywhere carries that fuel type. */}
+                {petrolFleet.length===0 && (
+                  <div style={{fontSize:11,color:T.danger,marginTop:3}}>
+                    No vehicle is set to petrol, so there is nothing to link to.
+                    Set the fuel type on the Fleet page first.
+                  </div>
+                )}
               </div>
               <div className="field"><label>Litres</label><input type="number" inputMode="decimal" value={iForm.litres} onChange={e=>setIForm(f=>({...f,litres:e.target.value}))}/></div>
               <div className="field"><label>Mileage / Hours</label><input type="text" inputMode="decimal" value={iForm.mileage} onChange={e=>setIForm(f=>({...f,mileage:e.target.value}))}/></div>
@@ -1034,11 +1073,14 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
         </div>
       )}
 
-      {/* Transfers sit below the tabs rather than inside one, so the
-          option is visible from every fuel view — the whole reason it
-          exists is that people were reaching for the wrong tool. */}
-      <FuelTransfers domain="petrol" locId={locId} companyId={companyId}
-        transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
+      {/* Gated to the purchases/deliveries tab only. It first rendered under
+          every tab, which made it read as an extension of whichever screen
+          you happened to be on rather than its own thing. A transfer is a
+          way fuel ARRIVES or LEAVES, so it belongs with deliveries. */}
+      {tabState==="purchases" && (
+        <FuelTransfers domain="petrol" locId={locId} companyId={companyId}
+          transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
+      )}
     </>
   );
 }
