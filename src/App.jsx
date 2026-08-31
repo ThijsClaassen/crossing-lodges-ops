@@ -3115,8 +3115,8 @@ function AuthenticatedApp() {
     setLoading(true); setLoadErr(null);
     try {
       const cf = `company_id=eq.${companyId}`;
-      const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows,partCnRows,
-             tripRows,purposeRows,hrEmpRows,vehicleJobRows,transferRows] = await Promise.all([
+      const [fleetRows,dDel,dIss,dDips,transferRows,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows,partCnRows,
+             tripRows,purposeRows,hrEmpRows,vehicleJobRows] = await Promise.all([
         sb.select("fleet", cf),
         sb.select("diesel_deliveries", cf),
         sb.select("diesel_issues", cf),
