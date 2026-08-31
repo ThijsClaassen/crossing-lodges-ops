@@ -7,7 +7,7 @@ import { LOGO_DATA } from "./logo.js";
 import Login from "./Login.jsx";
 import SetPassword from "./SetPassword.jsx";
 import { CompanyProvider, useCompany } from "./CompanyContext.jsx";
-import { transferEffect, incomingTransfers, outstandingSent, daysInTransit } from "./transferEngine.js";
+import { transferEffect, transferEffectAsOf, incomingTransfers, outstandingSent, daysInTransit } from "./transferEngine.js";
 import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
 import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPurchase.js";
 
@@ -442,6 +442,21 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
   // used to spot theft.
   const tx             = transferEffect(transfers, { domain: "diesel", locationId: locId });
   const theoretical    = (opening||0)+totalDelivered-totalIssued+tx.netUnits;
+
+  // Theoretical stock AS AT a past date, for the dip history table.
+  //
+  // Every row used to be compared against TODAY's theoretical, so a dip taken
+  // in June was scored against September's stock and its "variance" was
+  // meaningless — only the newest row was ever trustworthy. Each dip is now
+  // measured against what the tank should have held on the day it was dipped,
+  // which is the only comparison that says anything about that day.
+  const theoreticalAsOf = useCallback((iso) => {
+    const upto = (rows, pick) => (rows||[])
+      .filter(r => String(r.date||"") <= String(iso))
+      .reduce((sum, r) => sum + (Number(pick(r))||0), 0);
+    const t = transferEffectAsOf(transfers, { domain:"diesel", locationId:locId, asOf:iso });
+    return (opening||0) + upto(deliveries, d=>d.litres) - upto(issues, i=>i.litres) + t.netUnits;
+  }, [deliveries, issues, transfers, locId, opening]);
   // "Last dip" means the most recent BY DATE, which is not the last element of
   // this array. sb.select appends `order=created_at.desc`, so `dips` arrives
   // NEWEST FIRST — `dips[dips.length-1]` was therefore returning the very first
@@ -647,12 +662,15 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
                   created_at order, which usually looked right but drifted
                   whenever a dip was captured a day or two after it was taken. */}
               {dipsNewestFirst.map(d=>{
-                const v=d.litres-theoretical;const ok=Math.abs(v)<50;
+                // Compared against the tank as it should have been ON THIS
+                // DIP'S DATE, not as it is today.
+                const th=theoreticalAsOf(d.date);
+                const v=d.litres-th;const ok=Math.abs(v)<50;
                 return(
                   <tr key={d.id}>
                     <td className="mono" style={{fontSize:12}}>{d.date}</td>
                     <td className="num" style={{fontWeight:700}}>{fmtL(d.litres)}</td>
-                    <td className="num" style={{color:T.muted}}>{fmtL(Math.max(0,theoretical))}</td>
+                    <td className="num" style={{color:T.muted}}>{fmtL(Math.max(0,th))}</td>
                     <td className={`num ${ok?"ok":"bad"}`} style={{fontWeight:700}}>{v>0?"+":""}{v.toFixed(0)} L</td>
                     <td style={{fontSize:12,color:T.muted}}>{d.notes}</td>
                     <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>upd({dieselDips:dips.filter(x=>x.id!==d.id)})}>x</button>}</td>
