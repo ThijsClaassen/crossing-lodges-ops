@@ -265,6 +265,8 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
   const [dipForm,setDipForm]=useState({date:today(),litres:"",notes:""});
 
   const { dieselDeliveries:deliveries, dieselIssues:issues, dieselDips:dips, dieselOpening:opening } = loc;
+  const supplierOptions = useMemo(
+    ()=>[...new Set((deliveries||[]).map(d=>d.supplier).filter(Boolean))].sort(),[deliveries]);
   const upd = patch => setLoc(l=>({...l,...patch}));
 
   const totalDelivered = deliveries.reduce((s,d)=>s+(d.litres||0),0);
@@ -495,7 +497,10 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
               <div className="field"><label>Date</label><DateField value={dForm.date} onChange={v=>setDForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Litres Delivered</label><input type="number" inputMode="decimal" placeholder="e.g. 5000" value={dForm.litres} onChange={e=>setDForm(f=>({...f,litres:e.target.value}))}/></div>
               <div className="field"><label>Price / Litre (R)</label><input type="number" inputMode="decimal" step="0.01" value={dForm.pricePerLitre} onChange={e=>setDForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
-              <div className="field"><label>Supplier</label><input type="text" placeholder="e.g. Engen" value={dForm.supplier} onChange={e=>setDForm(f=>({...f,supplier:e.target.value}))}/></div>
+              <div className="field"><label>Supplier</label>
+                <PickOrAdd value={dForm.supplier} options={supplierOptions}
+                  onChange={v=>setDForm(f=>({...f,supplier:v}))} placeholder="e.g. Engen"/>
+              </div>
               <div className="field"><label>Invoice #</label><input type="text" value={dForm.invoiceNo} onChange={e=>setDForm(f=>({...f,invoiceNo:e.target.value}))}/></div>
             </div>
             {dForm.litres&&dForm.pricePerLitre&&(
@@ -565,6 +570,8 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
   const [iForm,setIForm]=useState({date:today(),litres:"",vehicle:"",mileage:"",notes:""});
 
   const {petrolPurchases:purchases,petrolIssues:issues,petrolOpening:opening}=loc;
+  const stationOptions = useMemo(
+    ()=>[...new Set((purchases||[]).map(x=>x.station).filter(Boolean))].sort(),[purchases]);
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const petrolFleet=fleet.filter(v=>v.fuel==="petrol");
 
@@ -742,7 +749,10 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
               <div className="field"><label>Date</label><DateField value={pForm.date} onChange={v=>setPForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Litres</label><input type="number" inputMode="decimal" value={pForm.litres} onChange={e=>setPForm(f=>({...f,litres:e.target.value}))}/></div>
               <div className="field"><label>Price / Litre (R)</label><input type="number" inputMode="decimal" step="0.01" value={pForm.pricePerLitre} onChange={e=>setPForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
-              <div className="field"><label>Filling Station</label><input type="text" placeholder="e.g. BP Modimolle" value={pForm.station} onChange={e=>setPForm(f=>({...f,station:e.target.value}))}/></div>
+              <div className="field"><label>Filling Station</label>
+                <PickOrAdd value={pForm.station} options={stationOptions}
+                  onChange={v=>setPForm(f=>({...f,station:v}))} placeholder="e.g. BP Modimolle"/>
+              </div>
             </div>
             {pForm.litres&&pForm.pricePerLitre&&(
               <div className="info-box" style={{marginBottom:12}}>
@@ -817,6 +827,8 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
   const parts=loc.parts;
   const partIssues=loc.partIssues||[];
   const partPurchases=loc.partPurchases||[];
+  const supplierOptions = useMemo(
+    ()=>[...new Set(partPurchases.map(x=>x.supplier).filter(Boolean))].sort(),[partPurchases]);
   const partCreditNotes=loc.partCreditNotes||[];
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
@@ -1234,7 +1246,10 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
               <div className="field"><label>Date</label><DateField value={purchaseForm.date} onChange={v=>setPurchaseForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Quantity</label><input type="number" inputMode="decimal" min="0" value={purchaseForm.qty} onChange={e=>setPurchaseForm(f=>({...f,qty:e.target.value}))}/></div>
               <div className="field"><label>Total Cost (R excl VAT)</label><input type="number" inputMode="decimal" step="0.01" value={purchaseForm.totalCost} onChange={e=>setPurchaseForm(f=>({...f,totalCost:e.target.value}))}/></div>
-              <div className="field"><label>Supplier</label><input type="text" value={purchaseForm.supplier} onChange={e=>setPurchaseForm(f=>({...f,supplier:e.target.value}))}/></div>
+              <div className="field"><label>Supplier</label>
+                <PickOrAdd value={purchaseForm.supplier} options={supplierOptions}
+                  onChange={v=>setPurchaseForm(f=>({...f,supplier:v}))} placeholder="New supplier name"/>
+              </div>
             </div>
             {purchaseForm.qty&&purchaseForm.totalCost&&(
               <div className="info-box" style={{marginBottom:12}}>
@@ -1265,7 +1280,10 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
               <div className="field"><label>Date</label><DateField value={creditForm.date} onChange={v=>setCreditForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Qty returned</label><input type="number" inputMode="decimal" min="0" value={creditForm.qty} onChange={e=>setCreditForm(f=>({...f,qty:e.target.value}))}/></div>
               <div className="field"><label>Unit cost (R excl VAT)</label><input type="number" inputMode="decimal" step="0.01" value={creditForm.unitCost} onChange={e=>setCreditForm(f=>({...f,unitCost:e.target.value}))}/></div>
-              <div className="field"><label>Supplier</label><input type="text" value={creditForm.supplier} onChange={e=>setCreditForm(f=>({...f,supplier:e.target.value}))}/></div>
+              <div className="field"><label>Supplier</label>
+                <PickOrAdd value={creditForm.supplier} options={supplierOptions}
+                  onChange={v=>setCreditForm(f=>({...f,supplier:v}))} placeholder="New supplier name"/>
+              </div>
             </div>
             <div className="field"><label>Reason</label>
               <select value={creditForm.reason} onChange={e=>setCreditForm(f=>({...f,reason:e.target.value}))}>
@@ -3334,6 +3352,72 @@ function OfflineStatus() {
 // help there. `options` is [{ value, label }].
 const searchSelectInput = {width:"100%",background:"rgba(0,0,0,.25)",border:`1px solid ${T.border}`,borderRadius:6,
   padding:"10px 11px",color:T.cream,fontFamily:"'Inter',sans-serif",fontSize:16,outline:"none"};
+
+// Pick an existing value or add a new one — for short free-text fields where
+// the same thing gets retyped over and over (supplier and filling-station
+// names).
+//
+// Added 2026-08-31. Supplier names are not cosmetic here: the Finance
+// Dashboard's supplier reconciliation matches uploaded statements against
+// purchase rows across five apps BY SUPPLIER NAME, so "Engen" and "engen "
+// become two suppliers and a statement silently fails to reconcile against
+// half its own invoices.
+//
+// The key behaviour is in confirm(): a newly typed value SNAPS to an existing
+// one when the two differ only by case, spacing or punctuation. A dropdown
+// alone does not stop drift, because people still click "+ New" and type a
+// variant; trimming alone does not either.
+function PickOrAdd({ value, options, onChange, placeholder = "New value" }) {
+  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState("");
+
+  function confirm() {
+    const typed = text.trim();
+    if (typed) {
+      const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const existing = options.find(o => norm(o) === norm(typed));
+      onChange(existing || typed);
+    }
+    setAdding(false); setText("");
+  }
+
+  if (adding || options.length === 0) {
+    return (
+      <div style={{display:"flex",gap:7}}>
+        <input
+          type="text" autoFocus={adding} placeholder={placeholder} value={value || ""}
+          onChange={e=>{ setText(e.target.value); onChange(e.target.value); }}
+          onBlur={()=>{ if (text.trim()) confirm(); }}
+          onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); confirm(); } }}
+          style={{flex:1}}
+        />
+        {options.length>0 && (
+          <button className="btn btn-ghost btn-sm" type="button"
+            onClick={()=>{ setAdding(false); setText(""); onChange(""); }}>
+            Choose existing
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{display:"flex",gap:7}}>
+      <select value={value || ""} onChange={e=>onChange(e.target.value)} style={{flex:1}}>
+        <option value="">-- Select --</option>
+        {options.map(o=><option key={o} value={o}>{o}</option>)}
+        {/* A value saved before this control existed must still show, even if
+            nothing else uses it — otherwise the select renders blank and the
+            next save quietly wipes it. */}
+        {value && !options.includes(value) && <option value={value}>{value}</option>}
+      </select>
+      <button className="btn btn-ghost btn-sm" type="button"
+        onClick={()=>{ setAdding(true); setText(""); onChange(""); }}>
+        + New
+      </button>
+    </div>
+  );
+}
 
 function SearchableSelect({ value, onChange, options, placeholder = "Select…", style, inputStyle, disabled }) {
   const [open, setOpen] = useState(false);
