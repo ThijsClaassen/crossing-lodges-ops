@@ -7,6 +7,7 @@ import { LOGO_DATA } from "./logo.js";
 import Login from "./Login.jsx";
 import SetPassword from "./SetPassword.jsx";
 import { CompanyProvider, useCompany } from "./CompanyContext.jsx";
+import { transferEffect, incomingTransfers, outstandingSent, daysInTransit } from "./transferEngine.js";
 import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
 import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPurchase.js";
 
@@ -255,7 +256,170 @@ function Dashboard({ locId, loc, fleet, locData, serviceJobs }) {
 }
 
 // ─── DIESEL INVENTORY ────────────────────────────────────────────────────────
-function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips, onSlipAttached }) {
+
+// Fuel transfers between lodge tanks (diesel or petrol).
+//
+// Before this existed there was no way to move fuel: diesel issues are tied to
+// a vehicle and a mileage reading, so litres pumped for another lodge could
+// only be recorded by letting the dip reading absorb them. That converts a
+// known, legitimate movement into unexplained VARIANCE — and variance is the
+// signal used to detect theft, so the workaround blinded the alarm.
+//
+// Two-step like stock transfers: litres leave this tank on send, and only
+// arrive in the other lodge's tank when someone there confirms. Anything sent
+// and never confirmed stays visible as an open transfer.
+function FuelTransfers({ domain, locId, companyId, transfers, litresOnHand, onChanged }) {
+  const [form, setForm] = useState({ to:"", litres:"", date:todayISO(), notes:"" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg]   = useState("");
+  const [gotQty, setGotQty] = useState({});
+
+  const others   = LOCATIONS.filter(l => l.id !== locId);
+  const lodge    = id => LOCATIONS.find(l => l.id === id)?.name || id;
+  const incoming = useMemo(()=>incomingTransfers(transfers,{domain,locationId:locId}),[transfers,domain,locId]);
+  const awaiting = useMemo(()=>outstandingSent(transfers,{domain,locationId:locId}),[transfers,domain,locId]);
+
+  const litres = parseFloat(form.litres)||0;
+  const over   = litres > (litresOnHand||0);
+
+  async function send() {
+    if (!form.to || litres<=0) { setMsg("Pick a lodge and a number of litres."); return; }
+    setBusy(true); setMsg("");
+    try {
+      await sb.insert("stock_transfers", {
+        id: uid(), company_id: companyId, domain,
+        from_location_id: locId, to_location_id: form.to,
+        item_id: null, item_name: domain === "diesel" ? "Diesel" : "Petrol",
+        qty: litres,
+        // Fuel has no weighted average per item, so value is left at zero
+        // rather than inventing a price. The litres are what matter for the
+        // tank; the rand value already sits in the Cost Summary.
+        unit_cost: 0, total_value: 0,
+        sent_date: form.date, status: "in_transit", notes: form.notes||null,
+      });
+      setForm({ to:"", litres:"", date:todayISO(), notes:"" });
+      setMsg(`Sent to ${lodge(form.to)} — counts as their fuel only once they confirm.`);
+      onChanged?.();
+    } catch(e){ setMsg("Could not send: "+e.message); } finally { setBusy(false); }
+  }
+
+  async function confirm(t) {
+    const raw = gotQty[t.id];
+    const got = raw===""||raw===undefined ? Number(t.qty) : Number(raw);
+    if (!(got>=0)) { setMsg("Litres received must be zero or more."); return; }
+    setBusy(true); setMsg("");
+    try {
+      await sb.patch("stock_transfers", t.id, { status:"received", received_date:todayISO(), received_qty:got });
+      const short = Number(t.qty)-got;
+      setMsg(short>0
+        ? `Received ${got} of ${t.qty} L. The ${short} L short stays visible as a loss in transit.`
+        : "Confirmed — now in this lodge's tank.");
+      onChanged?.();
+    } catch(e){ setMsg("Could not confirm: "+e.message); } finally { setBusy(false); }
+  }
+
+  async function cancel(t) {
+    setBusy(true); setMsg("");
+    try {
+      await sb.patch("stock_transfers", t.id, { status:"cancelled" });
+      setMsg("Cancelled — the fuel stays with the sending lodge.");
+      onChanged?.();
+    } catch(e){ setMsg("Could not cancel: "+e.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card" style={{marginTop:14}}>
+      <div className="card-title">Transfer fuel to another lodge</div>
+      <div style={{fontSize:12,color:T.muted,marginBottom:10}}>
+        Use this instead of issuing to a vehicle. A transfer never counts as usage and never
+        shows up as dip variance — so moving fuel legitimately can't look like a loss.
+      </div>
+      <div className="grid3">
+        <div className="field"><label>To lodge</label>
+          <select value={form.to} onChange={e=>setForm(f=>({...f,to:e.target.value}))}>
+            <option value="">Select lodge…</option>
+            {others.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+        </div>
+        <div className="field"><label>Litres</label>
+          <input type="number" inputMode="decimal" value={form.litres}
+            onChange={e=>setForm(f=>({...f,litres:e.target.value}))}/>
+          <div style={{fontSize:11,color:over?T.danger:T.muted,marginTop:3}}>
+            {over ? `Only ${fmtL(litresOnHand)} expected in this tank` : `${fmtL(litresOnHand)} expected in this tank`}
+          </div>
+        </div>
+        <div className="field"><label>Date sent</label>
+          <DateField value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/>
+        </div>
+      </div>
+      <div className="field"><label>Notes</label>
+        <input type="text" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}
+          placeholder="e.g. drums on the Hilux"/>
+      </div>
+      <button className="btn btn-primary" onClick={send} disabled={busy}>{busy?"Saving…":"Send fuel"}</button>
+      {msg && <div style={{fontSize:12,marginTop:8}}>{msg}</div>}
+
+      {incoming.length>0 && (
+        <>
+          <div className="card-title" style={{marginTop:16}}>Incoming — confirm what arrived ({incoming.length})</div>
+          <div className="tbl-wrap"><table className="tbl">
+            <thead><tr><th>Sent</th><th>From</th><th className="num">Sent L</th><th className="num">Received L</th><th></th></tr></thead>
+            <tbody>
+              {incoming.map(t=>{
+                const d = daysInTransit(t);
+                return (
+                  <tr key={t.id}>
+                    <td className="mono" style={{fontSize:12}}>{t.sent_date}
+                      {d>3 && <div style={{fontSize:10,color:T.danger}}>{d} days ago</div>}</td>
+                    <td>{lodge(t.from_location_id)}</td>
+                    <td className="num">{fmtL(t.qty)}</td>
+                    <td className="num">
+                      <input type="number" inputMode="decimal" placeholder={String(t.qty)}
+                        value={gotQty[t.id] ?? ""} style={{width:90}}
+                        onChange={e=>setGotQty(m=>({...m,[t.id]:e.target.value}))}/>
+                    </td>
+                    <td>
+                      <button className="btn btn-primary btn-sm" onClick={()=>confirm(t)} disabled={busy}>Confirm</button>{" "}
+                      <button className="btn btn-ghost btn-sm" onClick={()=>cancel(t)} disabled={busy}>Never sent</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table></div>
+        </>
+      )}
+
+      {awaiting.length>0 && (
+        <>
+          <div className="card-title" style={{marginTop:16}}>Sent, not yet confirmed ({awaiting.length})</div>
+          <div style={{fontSize:12,color:T.muted,marginBottom:6}}>
+            Already out of this tank. Anything here for more than a few days left and nobody
+            has said it arrived.
+          </div>
+          <div className="tbl-wrap"><table className="tbl">
+            <thead><tr><th>Sent</th><th>To</th><th className="num">Litres</th><th className="num">Waiting</th></tr></thead>
+            <tbody>
+              {awaiting.map(t=>{
+                const d = daysInTransit(t);
+                return (
+                  <tr key={t.id}>
+                    <td className="mono" style={{fontSize:12}}>{t.sent_date}</td>
+                    <td>{lodge(t.to_location_id)}</td>
+                    <td className="num">{fmtL(t.qty)}</td>
+                    <td className="num" style={{color:d>3?T.danger:T.muted}}>{d} day{d===1?"":"s"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table></div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips, onSlipAttached, transfers, onTransfersChanged }) {
   const [tab, setTab]             = useState("issues");
   const [showDelivery, setShowDelivery] = useState(false);
   const [showIssue,    setShowIssue]    = useState(false);
@@ -271,8 +435,29 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
 
   const totalDelivered = deliveries.reduce((s,d)=>s+(d.litres||0),0);
   const totalIssued    = issues.reduce((s,i)=>s+(i.litres||0),0);
-  const theoretical    = (opening||0)+totalDelivered-totalIssued;
-  const lastDip        = dips.length>0?dips[dips.length-1].litres:null;
+  // Fuel moved to or from another lodge's tank. THIS IS THE WHOLE POINT of
+  // fuel transfers: without it, litres pumped into a bakkie for the other
+  // lodge could only be recorded by letting the dip absorb them — turning a
+  // known movement into unexplained variance, which is exactly the signal
+  // used to spot theft.
+  const tx             = transferEffect(transfers, { domain: "diesel", locationId: locId });
+  const theoretical    = (opening||0)+totalDelivered-totalIssued+tx.netUnits;
+  // "Last dip" means the most recent BY DATE, which is not the last element of
+  // this array. sb.select appends `order=created_at.desc`, so `dips` arrives
+  // NEWEST FIRST — `dips[dips.length-1]` was therefore returning the very first
+  // dip ever recorded, and it never changed no matter how many were added.
+  // (The Finance Dashboard's Manager Overview sorted by date before taking the
+  // last one, so it showed the right figure while this screen showed the wrong
+  // one — worth knowing if the two ever disagree again.)
+  //
+  // Sorting by date rather than by insertion order also handles a dip that gets
+  // captured a day or two late: what matters is when the tank was measured, not
+  // when someone typed it in. Array.sort is stable, so dips sharing a date keep
+  // their created_at.desc order and the most recently entered one wins.
+  const dipsNewestFirst = useMemo(
+    ()=>[...dips].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))),[dips]);
+  const latestDip      = dipsNewestFirst[0] || null;
+  const lastDip        = latestDip ? latestDip.litres : null;
   const variance       = lastDip!==null?lastDip-theoretical:null;
   const varOk          = variance!==null&&Math.abs(variance)<50;
   const totalSpend     = deliveries.reduce((s,d)=>s+(d.litres||0)*(d.pricePerLitre||0),0);
@@ -457,7 +642,11 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
           <div className="tbl-wrap"><table className="tbl">
             <thead><tr><th>Date</th><th className="num">Dip (L)</th><th className="num">Theoretical</th><th className="num">Variance</th><th>Notes</th><th></th></tr></thead>
             <tbody>
-              {dips.map(d=>{
+              {/* Ordered by date, so the newest dip is the top row and matches
+                  the "Last Dip" figure above. Previously this listed in
+                  created_at order, which usually looked right but drifted
+                  whenever a dip was captured a day or two after it was taken. */}
+              {dipsNewestFirst.map(d=>{
                 const v=d.litres-theoretical;const ok=Math.abs(v)<50;
                 return(
                   <tr key={d.id}>
@@ -556,12 +745,18 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
           </div>
         </div>
       )}
+
+      {/* Transfers sit below the tabs rather than inside one, so the
+          option is visible from every fuel view — the whole reason it
+          exists is that people were reaching for the wrong tool. */}
+      <FuelTransfers domain="diesel" locId={locId} companyId={companyId}
+        transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
     </>
   );
 }
 
 // ─── PETROL INVENTORY ────────────────────────────────────────────────────────
-function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAttached }) {
+function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAttached, transfers, onTransfersChanged }) {
   const [tab,setTab]=[...useState("issues")];
   const [showPurchase,setShowPurchase]=useState(false);
   const [showIssue,setShowIssue]=useState(false);
@@ -577,7 +772,9 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
 
   const totalPurchased=purchases.reduce((s,p)=>s+(p.litres||0),0);
   const totalIssued   =issues.reduce((s,i)=>s+Math.abs(i.litres<0?i.litres:0),0);
-  const theoretical   =(opening||0)+totalPurchased-totalIssued;
+  // Same reasoning as diesel — see the note in DieselInventory.
+  const tx            = transferEffect(transfers, { domain: "petrol", locationId: locId });
+  const theoretical   =(opening||0)+totalPurchased-totalIssued+tx.netUnits;
   const totalSpend    =purchases.reduce((s,p)=>s+(p.litres||0)*(p.pricePerLitre||0),0);
   const wavg          =totalPurchased>0?totalSpend/totalPurchased:0;
 
@@ -818,6 +1015,12 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
           </div>
         </div>
       )}
+
+      {/* Transfers sit below the tabs rather than inside one, so the
+          option is visible from every fuel view — the whole reason it
+          exists is that people were reaching for the wrong tool. */}
+      <FuelTransfers domain="petrol" locId={locId} companyId={companyId}
+        transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
     </>
   );
 }
@@ -2821,6 +3024,10 @@ function AuthenticatedApp() {
   const [vehicleTrips, setVehicleTrips] = useState([]);
   const [tripPurposes, setTripPurposes] = useState([]);
   const [hrEmployees, setHrEmployees] = useState([]);
+  // Fuel transfers between lodge tanks. Held at the top level rather than
+  // inside the per-location `data` blob, because a transfer belongs to two
+  // lodges at once — filing it under one would hide it from the other.
+  const [transfers, setTransfers] = useState([]);
   const [vehicleJobs, setVehicleJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState(null);
@@ -2849,11 +3056,12 @@ function AuthenticatedApp() {
     try {
       const cf = `company_id=eq.${companyId}`;
       const [fleetRows,dDel,dIss,dDips,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows,partCnRows,
-             tripRows,purposeRows,hrEmpRows,vehicleJobRows] = await Promise.all([
+             tripRows,purposeRows,hrEmpRows,vehicleJobRows,transferRows] = await Promise.all([
         sb.select("fleet", cf),
         sb.select("diesel_deliveries", cf),
         sb.select("diesel_issues", cf),
         sb.select("diesel_dips", cf),
+        sb.select("stock_transfers", cf + "&domain=in.(diesel,petrol)"),
         sb.select("diesel_opening", cf),
         sb.select("petrol_purchases", cf),
         sb.select("petrol_issues", cf),
@@ -2901,6 +3109,7 @@ function AuthenticatedApp() {
       })));
       setTripPurposes((purposeRows||[]).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)));
       setHrEmployees(hrEmpRows||[]);
+      setTransfers(transferRows||[]);
       setVehicleJobs(vehicleJobRows||[]);
 
       // Built from LOCATIONS rather than a hardcoded {ZC,EC,SC} (2026-08-27).
@@ -3185,8 +3394,8 @@ function AuthenticatedApp() {
 
           <div className="section">
             {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData} serviceJobs={serviceJobs}/>}
-            {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
-            {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
+            {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
+            {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
             {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
             {page==="vehicles"  && vehicleRegisterEnabled && <VehicleRegister
