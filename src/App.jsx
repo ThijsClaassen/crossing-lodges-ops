@@ -1736,15 +1736,28 @@ const LICENSE_WARN_DAYS = 14;   // notify 2 weeks before licence disk expires
 const SERVICE_WARN_DAYS = 14;   // notify 2 weeks before service due date
 const SERVICE_WARN_KM   = 500;  // notify within 500 km of service due
 
+// Accepts both the DD/MM/YYYY this app stores via DateField and a bare ISO
+// YYYY-MM-DD. The ISO branch is not hypothetical: anything written to these
+// text columns by a seed script, an import, or a future migration to a real
+// `date` column arrives as ISO, and used to parse as null — see the guard in
+// vehicleStatus() for why a null here was worse than a blank.
 const parseDMY = (s) => {
   if (!s) return null;
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.trim());
+  if (iso) {
+    const d = new Date(+iso[1], +iso[2]-1, +iso[3]);
+    return isNaN(d.getTime()) ? null : d;
+  }
   const p = s.split("/");
   if (p.length !== 3) return null;
   const d = new Date(+p[2], +p[1]-1, +p[0]);
   return isNaN(d.getTime()) ? null : d;
 };
+// Null-safe: it is called on the result of parseDMY(), which returns null for
+// anything it can't read. Throwing there would take the whole page down over
+// one unreadable date, which is a far worse outcome than showing nothing.
 const fmtDMY = (dt) =>
-  `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}`;
+  dt ? `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}` : null;
 const addMonths = (dt, n) => { const d = new Date(dt.getTime()); d.setMonth(d.getMonth()+n); return d; };
 const daysUntil = (dmy) => {
   const d = parseDMY(dmy);
@@ -1774,11 +1787,19 @@ function vehicleStatus(v, latestKm) {
 
   if (v.license_expiry) {
     const days = daysUntil(v.license_expiry);
-    out.license = {
-      date: v.license_expiry,
-      days,
-      state: days < 0 ? "overdue" : days <= LICENSE_WARN_DAYS ? "soon" : "ok",
-    };
+    // An unparseable date must not become an alert. `null <= 14` is true in
+    // JS (null coerces to 0), so the old unguarded comparison quietly filed
+    // every unreadable date as "expiring soon" and rendered it as "Expires
+    // in null days" — a false alarm wearing a bug's clothing.
+    if (days != null) {
+      out.license = {
+        // Normalised here rather than at each of the render sites, so a row
+        // that arrived as ISO still displays in the app's own DD/MM/YYYY.
+        date: fmtDMY(parseDMY(v.license_expiry)),
+        days,
+        state: days < 0 ? "overdue" : days <= LICENSE_WARN_DAYS ? "soon" : "ok",
+      };
+    }
   }
 
   const hasDate = v.last_service_date && v.service_interval_months > 0;
@@ -1786,7 +1807,8 @@ function vehicleStatus(v, latestKm) {
 
   if (hasDate || hasKm) {
     const s = { dueDate:null, daysLeft:null, dueKm:null, kmLeft:null, state:"ok",
-                lastDate:v.last_service_date||null, lastKm:v.last_service_km ?? null };
+                lastDate:(v.last_service_date ? fmtDMY(parseDMY(v.last_service_date)) : null) || v.last_service_date || null,
+                lastKm:v.last_service_km ?? null };
 
     if (hasDate) {
       const last = parseDMY(v.last_service_date);
@@ -1811,6 +1833,21 @@ function vehicleStatus(v, latestKm) {
   return out;
 }
 
+// How far past due a row is, expressed in "intervals" — 1.0 means exactly one
+// full service interval (or one licence year) overshot. Negative means still
+// within the interval.
+//
+// This exists so days and kilometres can be ranked against each other. A
+// Land Cruiser 34,257 km past a 10,000 km service is 3.4 intervals overdue; a
+// licence disk 8 days expired is 0.02. Sorting on raw numbers would have put
+// the licence disk first because 8 > 3.4 is the wrong comparison to make.
+// Normalising by each rule's own interval is what makes the ordering mean
+// something to the person reading it.
+const DAYS_PER_MONTH = 30.44;
+const LICENCE_INTERVAL_DAYS = 365;
+const severityOf = (leftOver, interval) =>
+  leftOver == null || !(interval > 0) ? null : -leftOver / interval;
+
 // Every vehicle needing attention, worst first
 function buildFleetAlerts(fleet, locData) {
   const odo = latestOdometers(locData);
@@ -1819,6 +1856,7 @@ function buildFleetAlerts(fleet, locData) {
     const st = vehicleStatus(v, odo[v.id]);
     if (st.license && st.license.state !== "ok") {
       rows.push({ vehicle:v, kind:"Licence disk", state:st.license.state,
+        severity: severityOf(st.license.days, LICENCE_INTERVAL_DAYS) ?? 0,
         detail: st.license.state === "overdue"
           ? `Expired ${Math.abs(st.license.days)} day${Math.abs(st.license.days)===1?"":"s"} ago (${st.license.date})`
           : `Expires in ${st.license.days} day${st.license.days===1?"":"s"} (${st.license.date})` });
@@ -1835,10 +1873,22 @@ function buildFleetAlerts(fleet, locData) {
           ? `${Math.abs(st.service.kmLeft).toLocaleString()} km past due`
           : `${st.service.kmLeft.toLocaleString()} km to go`);
       }
-      rows.push({ vehicle:v, kind:"Service", state:st.service.state, detail: bits.join(" · ") });
+      // Both rules can be in play; the worse one sets the row's severity, the
+      // same way vehicleStatus() lets the worse one set the state.
+      const sevs = [
+        severityOf(st.service.daysLeft, (+v.service_interval_months || 0) * DAYS_PER_MONTH),
+        severityOf(st.service.kmLeft, +v.service_interval_km || 0),
+      ].filter(s => s != null);
+      rows.push({ vehicle:v, kind:"Service", state:st.service.state,
+        severity: sevs.length ? Math.max(...sevs) : 0,
+        detail: bits.join(" · ") });
     }
   });
-  return rows.sort((a,b) => (a.state==="overdue"?0:1) - (b.state==="overdue"?0:1));
+  // Descending severity. Overdue rows (positive) sort above coming-up ones
+  // (negative) for free, and within each group the most pressing comes first
+  // — which is the whole point: "12 things need attention" gets ignored,
+  // "2 overdue" gets acted on.
+  return rows.sort((a,b) => b.severity - a.severity);
 }
 
 // ─── SELF-SERVICED VEHICLES -> MAINTENANCE JOB CARDS ─────────────────────────
@@ -1890,7 +1940,19 @@ function FleetAlerts({ fleet, locData, onOpenVehicle, serviceJobs }) {
   const alerts = useMemo(() => buildFleetAlerts(fleet, locData), [fleet, locData]);
   if (alerts.length === 0) return null;
 
-  const overdue = alerts.filter(a => a.state === "overdue").length;
+  // Split rather than counted, because the two need saying differently. The
+  // old heading read "Fleet Attention Needed (12)" over twelve rows of equal
+  // weight — a vehicle that arguably shouldn't be driven sat level with a
+  // diary note for eighteen months' time, so the honest reading of the panel
+  // was "ignore me".
+  const overdueRows = alerts.filter(a => a.state === "overdue");
+  const soonRows    = alerts.filter(a => a.state !== "overdue");
+  const overdue = overdueRows.length;
+
+  const groups = [
+    { key:"overdue", label:`Overdue (${overdue})`, rows: overdueRows },
+    { key:"soon",    label:`Coming up (${soonRows.length})`, rows: soonRows },
+  ].filter(g => g.rows.length);
 
   return (
     <div style={{
@@ -1900,10 +1962,22 @@ function FleetAlerts({ fleet, locData, onOpenVehicle, serviceJobs }) {
     }}>
       <div style={{fontSize:10,letterSpacing:".12em",textTransform:"uppercase",fontWeight:700,
         color: overdue ? T.danger : T.warn, marginBottom:9}}>
-        Fleet Attention Needed ({alerts.length})
+        {/* The headline number is the one that demands action today. The rest
+            is still listed below, just not counted as urgency. */}
+        {overdue > 0
+          ? `Fleet — ${overdue} overdue${soonRows.length ? `, ${soonRows.length} coming up` : ""}`
+          : `Fleet — ${soonRows.length} coming up`}
       </div>
+      {groups.map(g => (
+      <div key={g.key} style={{marginBottom: g.key==="overdue" && soonRows.length ? 12 : 0}}>
+      {groups.length > 1 && (
+        <div style={{fontSize:10,letterSpacing:".1em",textTransform:"uppercase",fontWeight:700,
+          color: g.key==="overdue" ? T.danger : T.muted, marginBottom:6}}>
+          {g.label}
+        </div>
+      )}
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-        {alerts.map((a,i) => {
+        {g.rows.map((a,i) => {
           const sentToMaint = a.kind==="Service" && a.vehicle.self_serviced && serviceJobs?.[a.vehicle.id]?.open;
           return (
           <button key={i}
@@ -1926,6 +2000,8 @@ function FleetAlerts({ fleet, locData, onOpenVehicle, serviceJobs }) {
           );
         })}
       </div>
+      </div>
+      ))}
     </div>
   );
 }
