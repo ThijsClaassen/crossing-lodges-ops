@@ -254,11 +254,11 @@ export const css = `
 
 
 
-  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Space+Mono&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Inter:wght@300;400;500;600;700&display=swap');
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:${T.bg};color:${T.cream};font-family:'Inter',sans-serif;min-height:100vh;-webkit-tap-highlight-color:transparent}
-  .mono{font-family:'Space Mono',monospace}
-  .serif{font-family:'Cormorant Garamond',serif}
+  .mono{font-family:'Inter',sans-serif;font-variant-numeric:tabular-nums}
+  .serif{font-family:'Inter',sans-serif}
 
   /* ── DESKTOP LAYOUT ── */
   .shell{display:flex;height:100vh;overflow:hidden}
@@ -300,7 +300,7 @@ export const css = `
   .kpi{background:${T.panel};border:1px solid ${T.border};border-radius:8px;padding:16px 18px;position:relative;overflow:hidden}
   .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent,${T.gold})}
   .kpi-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:${T.muted};font-weight:600;margin-bottom:6px}
-  .kpi-value{font-size:24px;font-weight:700;color:${T.cream};font-family:'Space Mono',monospace}
+  .kpi-value{font-size:24px;font-weight:700;color:${T.cream};font-family:'Inter',sans-serif}
   .kpi-sub{font-size:11px;color:${T.muted};margin-top:3px}
 
   /* Section */
@@ -313,7 +313,7 @@ export const css = `
   .tbl th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:${T.muted};font-weight:600;padding:7px 11px;border-bottom:1px solid ${T.border};white-space:nowrap}
   .tbl td{padding:9px 11px;border-bottom:1px solid rgba(58,56,80,.5);color:${T.cream};vertical-align:middle}
   .tbl tr:hover td{background:rgba(184,147,90,.04)}
-  .tbl .num{font-family:'Space Mono',monospace;text-align:right}
+  .tbl .num{font-family:'Inter',sans-serif;text-align:right}
   .ok{color:${T.ok}} .bad{color:${T.danger}}
 
   /* Badges */
@@ -368,7 +368,7 @@ export const css = `
   .strip{background:rgba(184,147,90,.06);border:1px solid rgba(184,147,90,.2);border-radius:8px;padding:12px 14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
   .strip-item{text-align:center;min-width:70px}
   .strip-label{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:${T.muted};font-weight:600}
-  .strip-val{font-size:16px;font-weight:700;color:${T.gold};font-family:'Space Mono',monospace;margin-top:1px}
+  .strip-val{font-size:16px;font-weight:700;color:${T.gold};font-family:'Inter',sans-serif;margin-top:1px}
 
   /* Empty states */
   .empty{padding:36px;text-align:center;color:${T.muted};font-size:13px}

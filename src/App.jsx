@@ -188,7 +188,7 @@ function StockBanner({ cards }) {
         <div key={k.label} style={{background:T.panel,border:`1px solid ${k.big?k.accent:T.border}`,borderRadius:8,padding:"13px 15px",position:"relative",overflow:"hidden"}}>
           <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:k.accent}}/>
           <div style={{fontSize:9,letterSpacing:".12em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:5}}>{k.label}</div>
-          <div style={{fontSize:k.big?21:17,fontWeight:700,fontFamily:"'Space Mono'",color:k.accent}}>{k.val}</div>
+          <div style={{fontSize:k.big?21:17,fontWeight:700,fontFamily:"'Inter',sans-serif",color:k.accent}}>{k.val}</div>
         </div>
       ))}
     </div>
@@ -233,7 +233,7 @@ function Dashboard({ locId, loc, fleet, locData, serviceJobs }) {
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                   <div>
                     <div style={{fontSize:13,fontWeight:700,color:T.cream}}>{v.name}</div>
-                    <div style={{fontSize:10,color:T.muted,fontFamily:"'Space Mono'",marginTop:2}}>{v.id}</div>
+                    <div style={{fontSize:10,color:T.muted,fontFamily:"'Inter',sans-serif",marginTop:2}}>{v.id}</div>
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end"}}>
                     <span className={`badge badge-${v.fuel==="diesel"?"d":"p"}`}>{v.fuel}</span>
@@ -241,9 +241,9 @@ function Dashboard({ locId, loc, fleet, locData, serviceJobs }) {
                   </div>
                 </div>
                 <div style={{fontSize:11,color:T.muted,lineHeight:1.7}}>
-                  {dIssued>0 && <div>Diesel: <span style={{color:T.fuel_d,fontFamily:"'Space Mono'"}}>{fmtL(dIssued)}</span></div>}
-                  {pIssued>0 && <div>Petrol: <span style={{color:T.fuel_p,fontFamily:"'Space Mono'"}}>{fmtL(pIssued)}</span></div>}
-                  {repCost>0 && <div>Repairs: <span style={{color:T.cream,fontFamily:"'Space Mono'"}}>{fmtR(repCost)}</span></div>}
+                  {dIssued>0 && <div>Diesel: <span style={{color:T.fuel_d,fontFamily:"'Inter',sans-serif"}}>{fmtL(dIssued)}</span></div>}
+                  {pIssued>0 && <div>Petrol: <span style={{color:T.fuel_p,fontFamily:"'Inter',sans-serif"}}>{fmtL(pIssued)}</span></div>}
+                  {repCost>0 && <div>Repairs: <span style={{color:T.cream,fontFamily:"'Inter',sans-serif"}}>{fmtR(repCost)}</span></div>}
                   {!active && <div style={{color:T.border}}>No activity this month</div>}
                 </div>
               </div>
@@ -566,7 +566,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
           </table></div>
           {issues.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(74,124,181,.08)",border:`1px solid rgba(74,124,181,.25)`,borderRadius:6}}>
             <span style={{fontSize:11,color:T.muted}}>Total issued via meter: </span>
-            <strong style={{fontFamily:"'Space Mono'",color:T.fuel_d}}>{fmtL(totalIssued)}</strong>
+            <strong style={{fontFamily:"'Inter',sans-serif",color:T.fuel_d}}>{fmtL(totalIssued)}</strong>
           </div>}
         </>
       )}
@@ -601,9 +601,9 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
             </tbody>
           </table></div>
           {deliveries.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(90,155,106,.08)",border:`1px solid rgba(90,155,106,.25)`,borderRadius:6,display:"flex",gap:24}}>
-            <div><span style={{fontSize:11,color:T.muted}}>Total: </span><strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtL(totalDelivered)}</strong></div>
-            <div><span style={{fontSize:11,color:T.muted}}>Spend: </span><strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR(totalSpend)}</strong></div>
-            <div><span style={{fontSize:11,color:T.muted}}>Avg: </span><strong style={{fontFamily:"'Space Mono'",color:T.ok}}>R {wavg.toFixed(2)}/L</strong></div>
+            <div><span style={{fontSize:11,color:T.muted}}>Total: </span><strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtL(totalDelivered)}</strong></div>
+            <div><span style={{fontSize:11,color:T.muted}}>Spend: </span><strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtR(totalSpend)}</strong></div>
+            <div><span style={{fontSize:11,color:T.muted}}>Avg: </span><strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>R {wavg.toFixed(2)}/L</strong></div>
           </div>}
         </>
       )}
@@ -616,7 +616,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
             <div>
               <div style={{fontSize:10,letterSpacing:".1em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:4}}>Opening Stock (L)</div>
               <input type="number" inputMode="decimal" value={loc.dieselOpening} onChange={e=>upd({dieselOpening:parseFloat(e.target.value)||0})}
-                style={{width:130,background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Space Mono'",fontSize:14,outline:"none"}} placeholder="0"/>
+                style={{width:130,background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Inter',sans-serif",fontSize:14,outline:"none"}} placeholder="0"/>
             </div>
             <div style={{fontSize:12,color:T.muted,lineHeight:1.7,paddingTop:18}}>Set to litres in the tank at month start.</div>
           </div>
@@ -627,7 +627,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
                 {[["Delivered",fmtL(totalDelivered)],["Spend",fmtR(totalSpend)],["Avg Price",`R ${wavg.toFixed(2)}/L`],["Stock Value",fmtR(Math.max(0,theoretical)*wavg)]].map(([l,v])=>(
                   <div key={l}>
                     <div style={{fontSize:9,letterSpacing:".12em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:2}}>{l}</div>
-                    <div style={{fontSize:15,fontWeight:700,fontFamily:"'Space Mono'",color:T.gold}}>{v}</div>
+                    <div style={{fontSize:15,fontWeight:700,fontFamily:"'Inter',sans-serif",color:T.gold}}>{v}</div>
                   </div>
                 ))}
               </div>
@@ -722,7 +722,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
             {dForm.litres&&dForm.pricePerLitre&&(
               <div className="info-box" style={{marginBottom:12}}>
                 <span style={{fontSize:11,color:T.muted}}>Total cost of delivery</span>
-                <strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR((parseFloat(dForm.litres)||0)*(parseFloat(dForm.pricePerLitre)||0))}</strong>
+                <strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtR((parseFloat(dForm.litres)||0)*(parseFloat(dForm.pricePerLitre)||0))}</strong>
               </div>
             )}
             <div className="field"><label>Notes</label><input type="text" value={dForm.notes} onChange={e=>setDForm(f=>({...f,notes:e.target.value}))}/></div>
@@ -769,7 +769,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
               const dip=parseFloat(dipForm.litres)||0;const v=dip-theoretical;const ok=Math.abs(v)<50;
               return<div className="info-box" style={{background:ok?"rgba(90,155,106,.1)":"rgba(192,80,80,.1)",border:`1px solid ${ok?T.ok:T.danger}`,marginBottom:12}}>
                 <span style={{fontSize:11,color:T.muted}}>Variance vs theoretical ({fmtL(Math.max(0,theoretical))})</span>
-                <strong style={{fontFamily:"'Space Mono'",color:ok?T.ok:T.danger}}>{v>0?"+":""}{v.toFixed(0)} L</strong>
+                <strong style={{fontFamily:"'Inter',sans-serif",color:ok?T.ok:T.danger}}>{v>0?"+":""}{v.toFixed(0)} L</strong>
               </div>;
             })()}
             <div className="field"><label>Notes</label><input type="text" placeholder="Who dipped, conditions..." value={dipForm.notes} onChange={e=>setDipForm(f=>({...f,notes:e.target.value}))}/></div>
@@ -923,9 +923,9 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
             </tbody>
           </table></div>
           {purchases.length>0&&<div style={{marginTop:10,padding:"8px 13px",background:"rgba(90,155,106,.08)",border:`1px solid rgba(90,155,106,.25)`,borderRadius:6,display:"flex",gap:24}}>
-            <div><span style={{fontSize:11,color:T.muted}}>Total: </span><strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtL(totalPurchased)}</strong></div>
-            <div><span style={{fontSize:11,color:T.muted}}>Spend: </span><strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR(totalSpend)}</strong></div>
-            <div><span style={{fontSize:11,color:T.muted}}>Avg: </span><strong style={{fontFamily:"'Space Mono'",color:T.ok}}>R {wavg.toFixed(2)}/L</strong></div>
+            <div><span style={{fontSize:11,color:T.muted}}>Total: </span><strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtL(totalPurchased)}</strong></div>
+            <div><span style={{fontSize:11,color:T.muted}}>Spend: </span><strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtR(totalSpend)}</strong></div>
+            <div><span style={{fontSize:11,color:T.muted}}>Avg: </span><strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>R {wavg.toFixed(2)}/L</strong></div>
           </div>}
         </>
       )}
@@ -936,7 +936,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
             <div>
               <div style={{fontSize:10,letterSpacing:".1em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:4}}>Opening Stock (L)</div>
               <input type="number" inputMode="decimal" value={loc.petrolOpening} onChange={e=>upd({petrolOpening:parseFloat(e.target.value)||0})}
-                style={{width:130,background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Space Mono'",fontSize:14,outline:"none"}} placeholder="0"/>
+                style={{width:130,background:"rgba(0,0,0,.3)",border:`1px solid ${T.border}`,borderRadius:6,padding:"8px 11px",color:T.cream,fontFamily:"'Inter',sans-serif",fontSize:14,outline:"none"}} placeholder="0"/>
             </div>
             <div style={{fontSize:12,color:T.muted,lineHeight:1.7,paddingTop:18}}>Litres in jerrycans at month start.</div>
           </div>
@@ -947,7 +947,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                 {[["Purchased",fmtL(totalPurchased)],["Spend",fmtR(totalSpend)],["Avg Price",`R ${wavg.toFixed(2)}/L`],["Stock Value",fmtR(Math.max(0,theoretical)*wavg)]].map(([l,v])=>(
                   <div key={l}>
                     <div style={{fontSize:9,letterSpacing:".12em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:2}}>{l}</div>
-                    <div style={{fontSize:15,fontWeight:700,fontFamily:"'Space Mono'",color:T.gold}}>{v}</div>
+                    <div style={{fontSize:15,fontWeight:700,fontFamily:"'Inter',sans-serif",color:T.gold}}>{v}</div>
                   </div>
                 ))}
               </div>
@@ -999,7 +999,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
             {pForm.litres&&pForm.pricePerLitre&&(
               <div className="info-box" style={{marginBottom:12}}>
                 <span style={{fontSize:11,color:T.muted}}>Total cost</span>
-                <strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR((parseFloat(pForm.litres)||0)*(parseFloat(pForm.pricePerLitre)||0))}</strong>
+                <strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtR((parseFloat(pForm.litres)||0)*(parseFloat(pForm.pricePerLitre)||0))}</strong>
               </div>
             )}
             <div className="field"><label>Notes</label><input type="text" value={pForm.notes} onChange={e=>setPForm(f=>({...f,notes:e.target.value}))}/></div>
@@ -1517,7 +1517,7 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
             {purchaseForm.qty&&purchaseForm.totalCost&&(
               <div className="info-box" style={{marginBottom:12}}>
                 <span style={{fontSize:11,color:T.muted}}>Cost per unit</span>
-                <strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR((parseFloat(purchaseForm.totalCost)||0)/(parseFloat(purchaseForm.qty)||1))}</strong>
+                <strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtR((parseFloat(purchaseForm.totalCost)||0)/(parseFloat(purchaseForm.qty)||1))}</strong>
               </div>
             )}
             <div className="field"><label>Notes</label><input type="text" value={purchaseForm.notes} onChange={e=>setPurchaseForm(f=>({...f,notes:e.target.value}))}/></div>
@@ -1557,7 +1557,7 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
             {creditForm.qty&&creditForm.unitCost&&(
               <div className="info-box" style={{marginBottom:12}}>
                 <span style={{fontSize:11,color:T.muted}}>Total credit</span>
-                <strong style={{fontFamily:"'Space Mono'",color:T.ok}}>{fmtR((parseFloat(creditForm.qty)||0)*(parseFloat(creditForm.unitCost)||0))}</strong>
+                <strong style={{fontFamily:"'Inter',sans-serif",color:T.ok}}>{fmtR((parseFloat(creditForm.qty)||0)*(parseFloat(creditForm.unitCost)||0))}</strong>
               </div>
             )}
             <div className="field"><label>Notes</label><input type="text" value={creditForm.notes} onChange={e=>setCreditForm(f=>({...f,notes:e.target.value}))}/></div>
@@ -1667,13 +1667,13 @@ function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipA
               {[["Workshop Labour",viewEntry.labourCost],["Parts Supplied",viewEntry.partsCost],["Other",viewEntry.otherCost]].map(([l,v])=>(
                 <div key={l} style={{background:"rgba(201,125,58,.06)",border:`1px solid rgba(201,125,58,.2)`,borderRadius:7,padding:"11px 13px",textAlign:"center"}}>
                   <div style={{fontSize:9,letterSpacing:".1em",textTransform:"uppercase",color:T.muted,fontWeight:600,marginBottom:3}}>{l}</div>
-                  <div style={{fontSize:16,fontWeight:700,fontFamily:"'Space Mono'",color:parseFloat(v)>0?T.cream:T.muted}}>{parseFloat(v)>0?fmtR(v):"—"}</div>
+                  <div style={{fontSize:16,fontWeight:700,fontFamily:"'Inter',sans-serif",color:parseFloat(v)>0?T.cream:T.muted}}>{parseFloat(v)>0?fmtR(v):"—"}</div>
                 </div>
               ))}
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"rgba(201,125,58,.12)",border:`1px solid rgba(201,125,58,.35)`,borderRadius:7,padding:"12px 16px"}}>
               <span style={{fontSize:11,fontWeight:700,letterSpacing:".06em",textTransform:"uppercase",color:T.gold}}>Total Invoice</span>
-              <span style={{fontSize:21,fontWeight:700,fontFamily:"'Space Mono'",color:T.gold}}>{fmtR(viewEntry.totalCost||0)}</span>
+              <span style={{fontSize:21,fontWeight:700,fontFamily:"'Inter',sans-serif",color:T.gold}}>{fmtR(viewEntry.totalCost||0)}</span>
             </div>
             {viewEntry.notes&&<div style={{marginTop:12,fontSize:12,color:T.muted}}><strong style={{color:T.cream}}>Notes:</strong> {viewEntry.notes}</div>}
           </div>
@@ -1714,7 +1714,7 @@ function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipA
             </div>
             <div className="info-box" style={{marginBottom:12}}>
               <span style={{fontSize:11,color:T.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:".06em"}}>Invoice Total</span>
-              <span style={{fontFamily:"'Space Mono'",fontWeight:700,fontSize:17,color:T.gold}}>{fmtR(formTotal)}</span>
+              <span style={{fontFamily:"'Inter',sans-serif",fontWeight:700,fontSize:17,color:T.gold}}>{fmtR(formTotal)}</span>
             </div>
             <div className="field"><label>Notes</label><input type="text" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/></div>
             <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:16}}>
@@ -2095,7 +2095,7 @@ function VehicleDetail({ vehicle, locData, onClose }) {
           <div style={{background:"rgba(0,0,0,.22)",border:`1px solid ${T.border}`,borderRadius:7,padding:"11px 13px"}}>
             <div style={{fontSize:9,letterSpacing:".12em",textTransform:"uppercase",color:T.muted,fontWeight:700,marginBottom:6}}>Licence Disk</div>
             {st.license ? (<>
-              <div style={{fontFamily:"'Space Mono'",fontSize:15,fontWeight:700,color:stColor(st.license.state)}}>
+              <div style={{fontFamily:"'Inter',sans-serif",fontSize:15,fontWeight:700,color:stColor(st.license.state)}}>
                 {st.license.date}
               </div>
               <div style={{fontSize:11,color:T.muted,marginTop:3}}>
@@ -2109,7 +2109,7 @@ function VehicleDetail({ vehicle, locData, onClose }) {
           <div style={{background:"rgba(0,0,0,.22)",border:`1px solid ${T.border}`,borderRadius:7,padding:"11px 13px"}}>
             <div style={{fontSize:9,letterSpacing:".12em",textTransform:"uppercase",color:T.muted,fontWeight:700,marginBottom:6}}>Service</div>
             {st.service ? (<>
-              <div style={{fontFamily:"'Space Mono'",fontSize:15,fontWeight:700,color:stColor(st.service.state)}}>
+              <div style={{fontFamily:"'Inter',sans-serif",fontSize:15,fontWeight:700,color:stColor(st.service.state)}}>
                 {st.service.dueDate || (st.service.dueKm != null ? `${st.service.dueKm.toLocaleString()} km` : "—")}
               </div>
               <div style={{fontSize:11,color:T.muted,marginTop:3,lineHeight:1.5}}>
@@ -2301,14 +2301,14 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
                   <td><span className={`badge badge-${v.fuel==="diesel"?"d":"p"}`}>{v.fuel}</span></td>
                   <td>
                     {st.license
-                      ? <span style={{fontFamily:"'Space Mono'",fontSize:12,color:col(st.license.state)}}>
+                      ? <span style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:col(st.license.state)}}>
                           {st.license.date}
                         </span>
                       : <span style={{color:T.border,fontSize:11}}>—</span>}
                   </td>
                   <td>
                     {st.service
-                      ? <span style={{fontFamily:"'Space Mono'",fontSize:12,color:col(st.service.state)}}>
+                      ? <span style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:col(st.service.state)}}>
                           {st.service.dueDate || (st.service.dueKm!=null?`${st.service.dueKm.toLocaleString()} km`:"—")}
                         </span>
                       : <span style={{color:T.border,fontSize:11}}>—</span>}
@@ -2754,7 +2754,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
                 </td>
                 <td className="num">
                   {r.costPerKm !== null ? (
-                    <span style={{fontWeight:700,fontFamily:"'Space Mono'",color: r.costPerKm < 3 ? T.ok : r.costPerKm < 7 ? T.gold : T.danger}}>
+                    <span style={{fontWeight:700,fontFamily:"'Inter',sans-serif",color: r.costPerKm < 3 ? T.ok : r.costPerKm < 7 ? T.gold : T.danger}}>
                       R {r.costPerKm.toFixed(2)}
                     </span>
                   ) : <span style={{color:T.border,fontSize:11}}>—</span>}
@@ -2798,7 +2798,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
             onClick={()=>setMonthCursor(c=>{ const m=c.m-1; return m<0?{y:c.y-1,m:11}:{y:c.y,m}; })}>
             &#8592; Prev
           </button>
-          <div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:19,fontWeight:600,color:T.cream}}>
+          <div style={{fontFamily:"'Inter',sans-serif",fontSize:19,fontWeight:600,color:T.cream}}>
             {monthLabel(monthCursor.y, monthCursor.m)}
           </div>
           <button className="btn btn-ghost btn-sm" disabled={isCurrentOrFutureMonth}
@@ -2855,7 +2855,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
                 </td>
                 <td className="num">
                   {r.costPerKm !== null ? (
-                    <span style={{fontWeight:700,fontFamily:"'Space Mono'",color: r.costPerKm < 3 ? T.ok : r.costPerKm < 7 ? T.gold : T.danger}}>
+                    <span style={{fontWeight:700,fontFamily:"'Inter',sans-serif",color: r.costPerKm < 3 ? T.ok : r.costPerKm < 7 ? T.gold : T.danger}}>
                       R {r.costPerKm.toFixed(2)}
                     </span>
                   ) : <span style={{color:T.border,fontSize:11}}>—</span>}
@@ -2885,7 +2885,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
                   borderRadius:4,
                 }}/>
               </div>
-              <div style={{width:90,textAlign:"right",fontSize:12,fontFamily:"'Space Mono'",color:T.muted,flexShrink:0}}>
+              <div style={{width:90,textAlign:"right",fontSize:12,fontFamily:"'Inter',sans-serif",color:T.muted,flexShrink:0}}>
                 {x.total>0?fmtR(x.total):"—"}
               </div>
             </div>
@@ -4040,7 +4040,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
     <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
       <select value={locFilter} onChange={e=>setLocFilter(e.target.value)}
         style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
-                fontFamily:"'Space Mono'",fontSize:13,padding:"6px 10px"}}>
+                fontFamily:"'Inter',sans-serif",fontSize:13,padding:"6px 10px"}}>
         <option value="all">All lodges</option>
         {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
@@ -4160,7 +4160,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
                   <input type="number" inputMode="decimal" autoFocus value={closeKm}
                     onChange={e=>setCloseKm(e.target.value)} placeholder="closing km"
                     style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
-                            fontFamily:"'Space Mono'",fontSize:13,padding:"6px 10px",width:130}}/>
+                            fontFamily:"'Inter',sans-serif",fontSize:13,padding:"6px 10px",width:130}}/>
                   <button className="btn btn-primary btn-sm" onClick={closeTrip}>Save</button>
                   <button className="btn btn-ghost btn-sm" onClick={()=>{setClosing(null);setCloseKm("");setCloseErr("");}}>Cancel</button>
                 </div>
@@ -4254,7 +4254,7 @@ function TripPurposeManager({ purposes, setPurposes, companyId }) {
       <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="New category name"
           style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
-                  fontFamily:"'Space Mono'",fontSize:13,padding:"6px 10px",flex:1,minWidth:160}}/>
+                  fontFamily:"'Inter',sans-serif",fontSize:13,padding:"6px 10px",flex:1,minWidth:160}}/>
         <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:T.muted}}>
           <input type="checkbox" checked={isMaint} onChange={e=>setIsMaint(e.target.checked)}/>
           counts as maintenance
