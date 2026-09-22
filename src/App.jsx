@@ -4,6 +4,8 @@ import { subscribe as subscribeOffline, listRejected, retryRejected, discardEntr
 import { supabase } from "./supabaseClient.js";
 import { T, css } from "./theme.js";
 import { LOGO_DATA } from "./logo.js";
+import { SUPABASE_URL } from "./supabaseClient.js";
+import { resolveCompanyLogo, logoStyle } from "./companyLogo.js";
 import Login from "./Login.jsx";
 import SetPassword from "./SetPassword.jsx";
 import { CompanyProvider, useCompany } from "./CompanyContext.jsx";
@@ -3126,6 +3128,18 @@ function MemberPurchaseModal({ companyId, locId, onClose }) {
 }
 
 function AuthenticatedApp() {
+  const { company } = useCompany();
+
+  // The client's logo if they have one, ours if they don't (2026-09-22).
+  // The read the logo feature shipped without: the settings page wrote
+  // logo_path and nothing consumed it, so a client could upload their logo
+  // and still see Crossing Lodges on every screen.
+  const brand = resolveCompanyLogo({
+    company,
+    supabaseUrl: SUPABASE_URL,
+    fallback: LOGO_DATA,
+    fallbackAlt: "Crossing Lodges",
+  });
   const {
     loading: companyLoading,
     error: companyError,
@@ -3354,7 +3368,7 @@ function AuthenticatedApp() {
     <>
       <style>{css}</style>
       <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",gap:16,background:T.bg}}>
-        <img src={LOGO_DATA} alt="Crossing Lodges" style={{width:160,filter:"brightness(0) invert(1) opacity(.8)"}}/>
+        <img src={brand.src} alt={brand.alt} style={{width:160, ...logoStyle(brand.isClientLogo)}} onError={(e)=>{ if(e.target.src!==LOGO_DATA) e.target.src=LOGO_DATA; }}/>
         <div style={{fontSize:13,color:T.muted,letterSpacing:".1em",textTransform:"uppercase"}}>Loading operations data...</div>
         <div style={{width:220,height:3,background:T.border,borderRadius:2,overflow:"hidden"}}>
           <div style={{height:"100%",background:T.gold,borderRadius:2,width:"40%",animation:"ldg 1.2s ease-in-out infinite"}}/>
@@ -3384,7 +3398,7 @@ function AuthenticatedApp() {
         {/* ── DESKTOP SIDEBAR ── */}
         <div className="sidebar">
           <div className="logo">
-            <img src={LOGO_DATA} alt="Crossing Lodges" style={{width:148,height:"auto",filter:"brightness(0) invert(1) opacity(0.88)"}}/>
+            <img src={brand.src} alt={brand.alt} style={{width:148,height:"auto", ...logoStyle(brand.isClientLogo)}} onError={(e)=>{ if(e.target.src!==LOGO_DATA) e.target.src=LOGO_DATA; }}/>
             <div style={{fontSize:9,letterSpacing:".2em",textTransform:"uppercase",color:T.gold,fontWeight:600,marginTop:2,opacity:.8}}>Operations</div>
             <div style={{fontSize:11,color:T.muted,marginTop:4}}>{companyName}</div>
           </div>
