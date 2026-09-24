@@ -2011,8 +2011,26 @@ function FleetAlerts({ fleet, locData, onOpenVehicle, serviceJobs }) {
 // ─── VEHICLE DETAIL ──────────────────────────────────────────────────────────
 function VehicleDetail({ vehicle, locData, onClose }) {
   const [tab, setTab] = useState("repairs");
-  const DIESEL_PRICE = 20.5;
-  const PETROL_PRICE = 21.5;
+
+  // THE SAME PRICES THE COST SUMMARY USES (2026-09-24).
+  //
+  // This screen used to hold its own hardcoded DIESEL_PRICE = 20.5 /
+  // PETROL_PRICE = 21.5. When the Cost Summary moved to the real
+  // weighted-average price paid (#392), this modal was left behind — so the
+  // two screens costed the identical litres at different rates and disagreed
+  // about the same vehicle, with nothing on either page to say why.
+  //
+  // Thijs, 2026-09-24: Defender GV read R82,948.34 on the Cost Summary and
+  // R8,320.50 here. Same litres, ten times the money.
+  //
+  // One source now. If the figures still disagree after this, it is the data,
+  // not the arithmetic — see the plausibility warning below.
+  const price = useMemo(
+    () => fuelPricesFrom(locData, LOCATIONS.map(l => l.id)),
+    [locData],
+  );
+  const DIESEL_PRICE = price.diesel;
+  const PETROL_PRICE = price.petrol;
 
   const data = useMemo(() => {
     const repairs = [];
@@ -2085,6 +2103,10 @@ function VehicleDetail({ vehicle, locData, onClose }) {
     <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal" style={{maxWidth:760}}>
         <div className="modal-title">{vehicle.name}</div>
+        {/* Same warning as the Cost Summary. This modal is where someone
+            lands when a total looks wrong, so it has to explain itself here
+            too rather than only on the page they just left. */}
+        <FuelPriceWarning price={price} />
         <div style={{display:"flex",gap:7,marginBottom:16,flexWrap:"wrap"}}>
           <span className="mono" style={{fontSize:11,color:T.muted}}>{vehicle.id}</span>
           <span className={`badge badge-${vehicle.fuel==="diesel"?"d":"p"}`}>{vehicle.fuel}</span>
@@ -2463,6 +2485,18 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
 const FALLBACK_DIESEL_PRICE = 20.5;
 const FALLBACK_PETROL_PRICE = 21.5;
 
+// What a litre of fuel can credibly cost in rands. Anything outside this band
+// is a capture error, not a price — the usual one being the delivery TOTAL
+// typed into the price-per-litre field, which drags the weighted average up by
+// roughly the size of the delivery and silently inflates every vehicle's fuel
+// cost from then on.
+//
+// Deliberately NOT clamped. A clamped price would quietly show a believable
+// wrong number forever; a flagged one sends someone to the delivery that
+// caused it. The figure stays as computed and the screen says it is suspect.
+const PLAUSIBLE_FUEL_PRICE = { min: 5, max: 60 };
+const isPlausiblePrice = (p) => p >= PLAUSIBLE_FUEL_PRICE.min && p <= PLAUSIBLE_FUEL_PRICE.max;
+
 export function fuelPricesFrom(locData, locIds) {
   let dLitres = 0, dSpend = 0, pLitres = 0, pSpend = 0;
   for (const lid of locIds) {
@@ -2477,12 +2511,41 @@ export function fuelPricesFrom(locData, locIds) {
       if (l > 0 && pr > 0) { pLitres += l; pSpend += l * pr; }
     });
   }
+  const diesel = dLitres > 0 ? dSpend / dLitres : FALLBACK_DIESEL_PRICE;
+  const petrol = pLitres > 0 ? pSpend / pLitres : FALLBACK_PETROL_PRICE;
   return {
-    diesel: dLitres > 0 ? dSpend / dLitres : FALLBACK_DIESEL_PRICE,
-    petrol: pLitres > 0 ? pSpend / pLitres : FALLBACK_PETROL_PRICE,
+    diesel,
+    petrol,
     dieselIsActual: dLitres > 0,
     petrolIsActual: pLitres > 0,
+    // Only a real derived price can be implausible — the fallbacks are sane by
+    // construction, so a company with no purchase history never gets warned.
+    dieselSuspect: dLitres > 0 && !isPlausiblePrice(diesel),
+    petrolSuspect: pLitres > 0 && !isPlausiblePrice(petrol),
   };
+}
+
+// The banner both fuel-costing screens show when a derived price cannot be
+// right. Named, with the number, because "costs look wrong" sent Thijs looking
+// at the vehicle and the answer was in a delivery record.
+export function FuelPriceWarning({ price }) {
+  const bad = [];
+  if (price.dieselSuspect) bad.push(`diesel at R${price.diesel.toFixed(2)}/litre`);
+  if (price.petrolSuspect) bad.push(`petrol at R${price.petrol.toFixed(2)}/litre`);
+  if (!bad.length) return null;
+  return (
+    <div className="card" style={{border:`1px solid ${T.danger}`,marginBottom:12,padding:"10px 13px"}}>
+      <div style={{fontSize:13,fontWeight:700,color:T.danger,marginBottom:4}}>
+        Fuel price looks wrong — every figure below is affected
+      </div>
+      <div style={{fontSize:12,color:T.muted,lineHeight:1.55}}>
+        The average price paid works out to {bad.join(" and ")}, which cannot be right.
+        Fuel cost is litres × this price, so every vehicle is overstated by the same
+        proportion. Check Diesel and Petrol for a delivery where the TOTAL was typed
+        into the “Price / Litre” field.
+      </div>
+    </div>
+  );
 }
 
 // inMonth: null for lifetime, or (dateStr) => boolean for a single month.
@@ -2722,6 +2785,10 @@ function CostSummary({ locData, fleet, serviceJobs }) {
             <div className="strip-val" style={{color:T.fuel_p}}>R{price.petrol.toFixed(2)}/L</div>
             <div style={{fontSize:10,color:T.muted,marginTop:2}}>{price.petrolIsActual?"avg. actually paid":"estimate — no purchases logged"}</div></div>
         </div>
+
+        {/* Above the tip and above the tables: it invalidates everything
+            below it, so it cannot sit underneath them. */}
+        <FuelPriceWarning price={price} />
 
         {lifetime.length > 0 && withCpkm.length === 0 && (
           <div style={{background:"rgba(201,125,58,.07)",border:`1px solid rgba(201,125,58,.22)`,borderRadius:6,
