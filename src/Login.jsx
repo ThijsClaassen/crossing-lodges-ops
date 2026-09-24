@@ -57,7 +57,15 @@ export default function Login() {
     <>
       <style>{css}</style>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: T.bg, padding: 24 }}>
-        <img src={LOGO_DATA} alt="Crossing Lodges" style={{ width: 180, filter: 'brightness(0) invert(1) opacity(.9)', marginBottom: 8 }} />
+        {/* NO KNOCKOUT FILTER (2026-09-24). This used to carry
+          filter:'brightness(0) invert(1)', which forces every pixel of the
+          logo to pure white. That was right when this screen had a dark navy
+          background; the theme is light now, so it painted a white logo onto
+          a near-white page and the wordmark simply vanished.
+
+          The sidebar keeps its knockout — that rail really is dark navy. Here
+          the logo is shown in its own colours. */}
+      <img src={LOGO_DATA} alt="Crossing Lodges" style={{ width: 180, marginBottom: 8 }} />
         <div style={{ fontSize: 10, letterSpacing: '.2em', textTransform: 'uppercase', color: T.gold, fontWeight: 600, marginBottom: 36, opacity: 0.8 }}>Operations</div>
 
         <form onSubmit={handleSubmit} style={{ width: '100%', maxWidth: 340, background: T.panel, border: `1px solid ${T.border}`, borderRadius: 12, padding: 28 }}>

@@ -3089,7 +3089,7 @@ function AuthMessageScreen({ children }) {
     <>
       <style>{css}</style>
       <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",background:T.bg,padding:24,textAlign:"center"}}>
-        <img src={LOGO_DATA} alt="Crossing Lodges" style={{width:160,filter:"brightness(0) invert(1) opacity(.8)",marginBottom:16}}/>
+        <img src={LOGO_DATA} alt="Crossing Lodges" style={{width:160,marginBottom:16}}/>{/* knockout removed — see Login.jsx: this sits on the light --surface, not the navy rail */}
         <div style={{maxWidth:320}}>{children}</div>
       </div>
     </>
