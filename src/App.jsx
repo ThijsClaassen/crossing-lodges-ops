@@ -3229,7 +3229,15 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (LOCATIONS.length === 0) return
     if (!LOCATIONS.some((l) => l.id === locId)) setLocId(LOCATIONS[0].id)
-  }, [companyId, locId])
+    // companyLoading is a dependency on purpose (2026-09-26). LOCATIONS is a
+    // mutable module array, invisible to React: this effect first runs while
+    // the lodge list is still empty (returns early), and on a company switch
+    // it runs BEFORE the new list has arrived (old list, old pick still valid,
+    // nothing to do). Neither run snaps. companyLoading flips false exactly
+    // when the list is in place, so it is the signal to re-check. Without it
+    // the Ops app crashed on the new tenant: locId stayed 'ZC', locData had
+    // no such key, and the dashboard read loc.dieselIssues off undefined.
+  }, [companyId, locId, companyLoading])
   const [showMemberPurchase, setShowMemberPurchase] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [fleet,   setFleet]   = useState([]);
@@ -3405,7 +3413,11 @@ function AuthenticatedApp() {
   // Company-access guards — placed here, after every hook above, rather
   // than before them: React requires the same hooks to run on every render
   // in the same order, so an early return can't come before a useState.
-  if (companyLoading) {
+  // `loc` is undefined for one render when the lodge pick has not yet snapped
+  // to the new company's list (the effect above fixes it on the next tick).
+  // Treat that render as still loading rather than letting a child read
+  // loc.dieselIssues off undefined and take the whole app down.
+  if (companyLoading || (LOCATIONS.length > 0 && !loc)) {
     return (
       <AuthMessageScreen>
         <p>Loading your account…</p>
