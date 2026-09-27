@@ -101,7 +101,7 @@ function ScanSlipButton({ companyId, locId, onResult, label="Scan / attach slip"
         const res=await fetch("/api/parse-slip",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({images})});
         const data=await res.json();
         if(res.ok) ocr=data;
-      }catch{ /* OCR failed — the photo is already saved either way */ }
+      }catch(e){ console.warn("Slip reader:", e?.message||e); /* OCR failed — the photo is already saved either way */ }
       onResult({ slipId: slip.id, ocr });
       setNote(ocr ? (ocr.truncated ? "Slip photo saved and read — it is very long, so the last few lines may be missing. Check the fields below against the slip." : "Slip photo saved and read — check the fields below.") : "Slip photo saved. Could not read it automatically — enter the details below by hand.");
     }catch(err){ setNote("Could not save the slip photo: "+err.message); }
