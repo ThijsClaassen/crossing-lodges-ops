@@ -49,5 +49,13 @@ check('TripDrawer shows the licence check as logged that day', /driver_qualified
 for (const cls of ['.toolbar', 'tr.row-open', '.chip', '.badge-warn']) check(`theme has ${cls}`, THEME.includes(cls))
 const lastHook = Math.max(vr.lastIndexOf('useState('), vr.lastIndexOf('useMemo('), vr.lastIndexOf('useEffect('))
 check('no hook after the return in VehicleRegister', lastHook < vr.indexOf('return (<>'))
+// Round 4 (2026-09-27): the five fuel forms are drawers too — one screen each.
+for (const t of ['Log bulk diesel delivery', 'Log diesel issue', 'Log tank dip', 'Log petrol purchase', 'Log petrol issue']) {
+  const i = APP.indexOf(`<Drawer title="${t}"`)
+  const block = i > 0 ? APP.slice(i, APP.indexOf('</Drawer>', i)) : ''
+  check(`${t} is a one-screen drawer`, i > 0 && !/tabs=\{/.test(block))
+}
+check('no fuel form is left as an overlay modal', !/Log Bulk <span>Diesel Delivery|Log Diesel <span>Issue|Log Tank <span>Dip|Log <span>Petrol Purchase|Log <span>Petrol Issue/.test(APP))
+
 console.log(failed ? `\n${failed} check(s) failed` : '\nall trip log checks pass')
 process.exit(failed ? 1 : 0)

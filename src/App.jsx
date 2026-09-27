@@ -706,9 +706,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
 
       {/* MODALS */}
       {showDelivery&&(
-        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowDelivery(false)}>
-          <div className="modal">
-            <div className="modal-title">Log Bulk <span>Diesel Delivery</span></div>
+        <Drawer title="Log bulk diesel delivery" onClose={()=>setShowDelivery(false)} footer={<><button className="btn btn-primary" onClick={addDelivery}>Save Delivery</button><button className="btn btn-ghost" onClick={()=>setShowDelivery(false)}>Cancel</button></>}>
             <ScanSlipButton companyId={companyId} locId={locId} onResult={({slipId,ocr})=>{
               const li = ocr?.line_items?.[0];
               const litres = li?.qty!=null ? String(li.qty) : null;
@@ -721,7 +719,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
                 pricePerLitre: price!=null ? price : f.pricePerLitre,
               }));
             }}/>
-            <div className="grid2">
+            <div className="drawer-grid">
               <div className="field"><label>Date</label><DateField value={dForm.date} onChange={v=>setDForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Litres Delivered</label><input type="number" inputMode="decimal" placeholder="e.g. 5000" value={dForm.litres} onChange={e=>setDForm(f=>({...f,litres:e.target.value}))}/></div>
               <div className="field"><label>Price / Litre (R)</label><input type="number" inputMode="decimal" step="0.01" value={dForm.pricePerLitre} onChange={e=>setDForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
@@ -738,15 +736,11 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
               </div>
             )}
             <div className="field"><label>Notes</label><input type="text" value={dForm.notes} onChange={e=>setDForm(f=>({...f,notes:e.target.value}))}/></div>
-            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addDelivery}>Save Delivery</button><button className="btn btn-ghost" onClick={()=>setShowDelivery(false)}>Cancel</button></div>
-          </div>
-        </div>
+        </Drawer>
       )}
       {showIssue&&(
-        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowIssue(false)}>
-          <div className="modal">
-            <div className="modal-title">Log Diesel <span>Issue</span></div>
-            <div className="grid2">
+        <Drawer title="Log diesel issue" onClose={()=>setShowIssue(false)} footer={<><button className="btn btn-primary" onClick={addIssue}>Save Issue</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></>}>
+            <div className="drawer-grid">
               <div className="field"><label>Date</label><DateField value={iForm.date} onChange={v=>setIForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Vehicle / Equipment</label>
                 <select value={iForm.vehicle} onChange={e=>setIForm(f=>({...f,vehicle:e.target.value}))}>
@@ -765,15 +759,11 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
               <div className="field"><label>Mileage / Hours</label><input type="text" inputMode="decimal" value={iForm.mileage} onChange={e=>setIForm(f=>({...f,mileage:e.target.value}))}/></div>
             </div>
             <div className="field"><label>Notes</label><input type="text" value={iForm.notes} onChange={e=>setIForm(f=>({...f,notes:e.target.value}))}/></div>
-            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addIssue}>Save Issue</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></div>
-          </div>
-        </div>
+        </Drawer>
       )}
       {showDip&&(
-        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowDip(false)}>
-          <div className="modal" style={{maxWidth:400}}>
-            <div className="modal-title">Log Tank <span>Dip</span></div>
-            <div className="grid2">
+        <Drawer title="Log tank dip" onClose={()=>setShowDip(false)} footer={<><button className="btn btn-primary" onClick={addDip}>Save Dip</button><button className="btn btn-ghost" onClick={()=>setShowDip(false)}>Cancel</button></>}>
+            <div className="drawer-grid">
               <div className="field"><label>Date</label><DateField value={dipForm.date} onChange={v=>setDipForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Dip Reading (L)</label><input type="number" inputMode="decimal" value={dipForm.litres} onChange={e=>setDipForm(f=>({...f,litres:e.target.value}))}/></div>
             </div>
@@ -785,9 +775,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
               </div>;
             })()}
             <div className="field"><label>Notes</label><input type="text" placeholder="Who dipped, conditions..." value={dipForm.notes} onChange={e=>setDipForm(f=>({...f,notes:e.target.value}))}/></div>
-            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addDip}>Save Dip</button><button className="btn btn-ghost" onClick={()=>setShowDip(false)}>Cancel</button></div>
-          </div>
-        </div>
+        </Drawer>
       )}
 
       {/* Gated to the purchases/deliveries tab only. It first rendered under
@@ -984,9 +972,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
       )}
 
       {showPurchase&&(
-        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowPurchase(false)}>
-          <div className="modal" style={{maxWidth:440}}>
-            <div className="modal-title">Log <span>Petrol Purchase</span></div>
+        <Drawer title="Log petrol purchase" onClose={()=>setShowPurchase(false)} footer={<><button className="btn btn-primary" onClick={addPurchase}>Save</button><button className="btn btn-ghost" onClick={()=>setShowPurchase(false)}>Cancel</button></>}>
             <ScanSlipButton companyId={companyId} locId={locId} onResult={({slipId,ocr})=>{
               const li = ocr?.line_items?.[0];
               const litres = li?.qty!=null ? String(li.qty) : null;
@@ -999,7 +985,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                 pricePerLitre: price!=null ? price : f.pricePerLitre,
               }));
             }}/>
-            <div className="grid2">
+            <div className="drawer-grid">
               <div className="field"><label>Date</label><DateField value={pForm.date} onChange={v=>setPForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Litres</label><input type="number" inputMode="decimal" value={pForm.litres} onChange={e=>setPForm(f=>({...f,litres:e.target.value}))}/></div>
               <div className="field"><label>Price / Litre (R)</label><input type="number" inputMode="decimal" step="0.01" value={pForm.pricePerLitre} onChange={e=>setPForm(f=>({...f,pricePerLitre:e.target.value}))}/></div>
@@ -1024,7 +1010,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                 <span style={{fontSize:13,fontWeight:600,color:T.cream}}>Also fill up a vehicle with this now</span>
               </label>
               {pForm.issueNow&&(<>
-                <div className="grid2">
+                <div className="drawer-grid">
                   <div className="field"><label>Vehicle</label>
                     <select value={pForm.issueVehicle} onChange={e=>setPForm(f=>({...f,issueVehicle:e.target.value}))}>
                       <option value="">— Select —</option>
@@ -1047,16 +1033,11 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
                 )}
               </>)}
             </div>
-
-            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addPurchase}>Save</button><button className="btn btn-ghost" onClick={()=>setShowPurchase(false)}>Cancel</button></div>
-          </div>
-        </div>
+        </Drawer>
       )}
       {showIssue&&(
-        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowIssue(false)}>
-          <div className="modal" style={{maxWidth:440}}>
-            <div className="modal-title">Log <span>Petrol Issue</span></div>
-            <div className="grid2">
+        <Drawer title="Log petrol issue" onClose={()=>setShowIssue(false)} footer={<><button className="btn btn-primary" onClick={addIssue}>Save</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></>}>
+            <div className="drawer-grid">
               <div className="field"><label>Date</label><DateField value={iForm.date} onChange={v=>setIForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Vehicle / Equipment</label>
                 <select value={iForm.vehicle} onChange={e=>setIForm(f=>({...f,vehicle:e.target.value}))}>
@@ -1080,9 +1061,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
               <div className="field"><label>Mileage / Hours</label><input type="text" inputMode="decimal" value={iForm.mileage} onChange={e=>setIForm(f=>({...f,mileage:e.target.value}))}/></div>
             </div>
             <div className="field"><label>Notes</label><input type="text" value={iForm.notes} onChange={e=>setIForm(f=>({...f,notes:e.target.value}))}/></div>
-            <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addIssue}>Save</button><button className="btn btn-ghost" onClick={()=>setShowIssue(false)}>Cancel</button></div>
-          </div>
-        </div>
+        </Drawer>
       )}
 
       {/* Gated to the purchases/deliveries tab only. It first rendered under
