@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { prepareSlipImages } from "./slipTiles.js";
+import { prepareSlipImages, readSlipParts } from "./slipTiles.js";
 import { sb, LOCATIONS, LOC_COLORS } from "./sb.js";
 import { subscribe as subscribeOffline, listRejected, retryRejected, discardEntry, syncNow } from "./offline.js";
 import { supabase } from "./supabaseClient.js";
@@ -98,9 +98,7 @@ function ScanSlipButton({ companyId, locId, onResult, label="Scan / attach slip"
       const slip = await uploadPurchaseSlip({companyId, locationId:locId, blob:resized});
       let ocr=null;
       try{
-        const res=await fetch("/api/parse-slip",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({images})});
-        const data=await res.json();
-        if(res.ok) ocr=data;
+        ocr=await readSlipParts(images);   // one request per tile, in parallel, stitched
       }catch(e){ console.warn("Slip reader:", e?.message||e); /* OCR failed — the photo is already saved either way */ }
       onResult({ slipId: slip.id, ocr });
       setNote(ocr ? (ocr.truncated ? "Slip photo saved and read — it is very long, so the last few lines may be missing. Check the fields below against the slip." : "Slip photo saved and read — check the fields below.") : "Slip photo saved. Could not read it automatically — enter the details below by hand.");
