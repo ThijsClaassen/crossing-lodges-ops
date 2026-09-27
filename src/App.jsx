@@ -10,6 +10,7 @@ import Login from "./Login.jsx";
 import SetPassword from "./SetPassword.jsx";
 import { CompanyProvider, useCompany } from "./CompanyContext.jsx";
 import { transferEffect, transferEffectAsOf, incomingTransfers, outstandingSent, daysInTransit } from "./transferEngine.js";
+import { COST_KINDS, KIND_LABEL, PERIODS, runningCostsFor } from "./runningCosts.js";
 import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
 import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPurchase.js";
 
@@ -2018,8 +2019,31 @@ function FleetAlerts({ fleet, locData, onOpenVehicle, serviceJobs }) {
 }
 
 // ─── VEHICLE DETAIL ──────────────────────────────────────────────────────────
-function VehicleDetail({ vehicle, locData, onClose }) {
+function VehicleDetail({ vehicle, locData, onClose, vehicleCosts = [], setVehicleCosts, assets = [], companyId }) {
   const [tab, setTab] = useState("repairs");
+  // Running costs (#488): the vehicle's own vehicle_costs rows, and its
+  // fixed-asset rows (depreciation) from the Finance Dashboard register.
+  const myCosts  = useMemo(()=> (vehicleCosts||[]).filter(c=>c.vehicle_id===vehicle.id).sort((a,b)=>String(b.start_date).localeCompare(String(a.start_date))), [vehicleCosts, vehicle.id]);
+  const myAssets = useMemo(()=> (assets||[]).filter(a=>a.fleet_id===vehicle.id), [assets, vehicle.id]);
+  const [cForm, setCForm] = useState({ kind:"tracker", description:"", amount:"", period:"monthly", start_date:todayISO(), end_date:"" });
+  const [cErr, setCErr] = useState("");
+  async function addCost() {
+    setCErr("");
+    const amount = parseFloat(cForm.amount);
+    if(!(amount>=0)) return setCErr("Enter the amount.");
+    if(!cForm.start_date) return setCErr(cForm.period==="once" ? "Enter the date." : "Enter the start date.");
+    const row = { id:uid(), company_id:companyId, vehicle_id:vehicle.id, kind:cForm.kind, description:cForm.description.trim()||null,
+      amount, period:cForm.period, start_date:cForm.start_date, end_date: cForm.period==="once" ? null : (cForm.end_date||null), notes:null };
+    try {
+      await sb.insert("vehicle_costs", row);
+      setVehicleCosts?.(p=>[row, ...p]);
+      setCForm(f=>({ ...f, description:"", amount:"" }));
+    } catch(ex){ setCErr(ex.message); }
+  }
+  async function removeCost(c) {
+    if(!window.confirm(`Remove ${KIND_LABEL[c.kind]||c.kind} ${fmtR(c.amount)}?`)) return;
+    try { await sb.delete("vehicle_costs", c.id); setVehicleCosts?.(p=>p.filter(x=>x.id!==c.id)); } catch(ex){ setCErr(ex.message); }
+  }
 
   // THE SAME PRICES THE COST SUMMARY USES (2026-09-24).
   //
@@ -2106,6 +2130,7 @@ function VehicleDetail({ vehicle, locData, onClose }) {
     { id:"repairs", label:`Repairs (${data.repairs.length})` },
     { id:"parts",   label:`Parts (${data.parts.length})` },
     { id:"fuel",    label:`Fuel (${data.fuel.length})` },
+    { id:"costs",   label:`Running costs (${myCosts.length})` },
   ];
 
   return (
@@ -2237,6 +2262,65 @@ function VehicleDetail({ vehicle, locData, onClose }) {
           </table></div>
         )}
 
+        {tab==="costs" && (
+          <div>
+            <div style={{fontSize:11,color:T.muted,marginBottom:8,lineHeight:1.5}}>
+              What this vehicle costs beyond fuel, parts, repairs and insurance: tracker, licence disk, roadworthy, radio licence
+              (recurring), and tolls, fines, towing, cleaning (one-off). Tyres go under Repairs. All of it feeds the cost per km
+              and therefore what Maintenance charges for a trip.
+            </div>
+            {myAssets.length>0 ? (
+              <div style={{fontSize:12,marginBottom:8}}>
+                Depreciation (from the Fixed Asset Register): {myAssets.map(a=>`${a.description} — R ${fmtNum(Math.round((Number(a.cost_price)*Number(a.depreciation_rate))/12))}/month${a.disposal_date?" (disposed)":""}`).join("; ")}
+              </div>
+            ) : (
+              <div style={{fontSize:12,color:T.muted,marginBottom:8}}>
+                No fixed asset linked to this vehicle, so no depreciation is counted. Link it in the Finance Dashboard → Fixed Assets (Vehicle column).
+              </div>
+            )}
+            <div className="grid2">
+              <div className="field"><label>Cost</label>
+                <select value={cForm.kind} onChange={e=>{ const k=COST_KINDS.find(x=>x.id===e.target.value); setCForm(f=>({...f, kind:e.target.value, period:k?.defaultPeriod||f.period})); }}>
+                  {COST_KINDS.map(k=><option key={k.id} value={k.id}>{k.label}</option>)}
+                </select>
+              </div>
+              <div className="field"><label>How often</label>
+                <select value={cForm.period} onChange={e=>setCForm(f=>({...f,period:e.target.value}))}>
+                  {PERIODS.map(p=><option key={p} value={p}>{p==="once"?"once (dated)":p}</option>)}
+                </select>
+              </div>
+              <div className="field"><label>Amount (R{cForm.period==="monthly"?" per month":cForm.period==="annual"?" per year":""})</label>
+                <input type="number" inputMode="decimal" min="0" step="0.01" value={cForm.amount} onChange={e=>setCForm(f=>({...f,amount:e.target.value}))}/></div>
+              <div className="field"><label>Description</label>
+                <input type="text" placeholder="e.g. Cartrack" value={cForm.description} onChange={e=>setCForm(f=>({...f,description:e.target.value}))}/></div>
+              <div className="field"><label>{cForm.period==="once"?"Date":"From"}</label>
+                <input type="date" value={cForm.start_date} onChange={e=>setCForm(f=>({...f,start_date:e.target.value}))}/></div>
+              {cForm.period!=="once" && (
+                <div className="field"><label>Until (blank = still running)</label>
+                  <input type="date" value={cForm.end_date} onChange={e=>setCForm(f=>({...f,end_date:e.target.value}))}/></div>
+              )}
+            </div>
+            {cErr && <div style={{color:T.danger,fontSize:12,marginBottom:6}}>{cErr}</div>}
+            <button className="btn btn-primary btn-sm" onClick={addCost}>+ Add cost</button>
+            <div className="tbl-wrap" style={{marginTop:10}}><table className="tbl" style={{minWidth:0}}>
+              <thead><tr><th>Cost</th><th>How often</th><th className="num">Amount</th><th>From / date</th><th>Until</th><th></th></tr></thead>
+              <tbody>
+                {myCosts.map(c=>(
+                  <tr key={c.id}>
+                    <td>{KIND_LABEL[c.kind]||c.kind}{c.description?<span style={{color:T.muted}}> — {c.description}</span>:null}</td>
+                    <td>{c.period}</td>
+                    <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(c.amount)}</td>
+                    <td className="mono" style={{fontSize:11}}>{c.start_date}</td>
+                    <td className="mono" style={{fontSize:11}}>{c.period==="once"?"—":(c.end_date||"running")}</td>
+                    <td><button className="btn btn-danger btn-sm" onClick={()=>removeCost(c)}>Remove</button></td>
+                  </tr>
+                ))}
+                {myCosts.length===0&&<tr><td colSpan={6} className="empty">No running costs entered yet</td></tr>}
+              </tbody>
+            </table></div>
+          </div>
+        )}
+
         <div style={{display:"flex",gap:9,marginTop:16}}>
           <button className="btn btn-ghost" onClick={onClose}>Close</button>
         </div>
@@ -2245,7 +2329,7 @@ function VehicleDetail({ vehicle, locData, onClose }) {
   );
 }
 
-function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyId }) {
+function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyId, vehicleCosts = [], setVehicleCosts, assets = [] }) {
   // Read the flag here rather than threading a prop down — the Running Cost
   // field is the only part of this page that's Demo-gated.
   const { vehicleRegisterEnabled } = useCompany();
@@ -2367,7 +2451,7 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
       ))}
 
       {detailVehicle && (
-        <VehicleDetail vehicle={detailVehicle} locData={locData||{}} onClose={()=>setDetailVehicle(null)}/>
+        <VehicleDetail vehicle={detailVehicle} locData={locData||{}} onClose={()=>setDetailVehicle(null)} vehicleCosts={vehicleCosts} setVehicleCosts={setVehicleCosts} assets={assets} companyId={companyId}/>
       )}
 
       {showForm && (
@@ -2613,7 +2697,7 @@ export function FuelPriceWarning({ price }) {
 // inMonth: null for lifetime, or (dateStr) => boolean for a single month.
 // locIds: the lodges being shown. allLocIds: every lodge, used to work out a
 // vehicle's total usage so insurance can be split fairly (see below).
-export function computeVehicleCosts({ locData, fleet, locIds, inMonth = null, allLocIds = null }) {
+export function computeVehicleCosts({ locData, fleet, locIds, inMonth = null, allLocIds = null, vehicleCosts = [], assets = [], monthWindow = null }) {
   const price = fuelPricesFrom(locData, locIds);
   const everyLoc = allLocIds || locIds;
   const m = {};
@@ -2713,11 +2797,33 @@ export function computeVehicleCosts({ locData, fleet, locIds, inMonth = null, al
       insurance = d.insurance_monthly * months * share;
     }
 
-    const total = d.fuel + d.parts + d.repairs + insurance;
+    // --- The rest (#488, 2026-09-27) --------------------------------------
+    // Recurring costs (tracker, licence disk, roadworthy, radio licence…),
+    // one-offs (tolls, fines, towing, cleaning) and depreciation from the
+    // fixed asset register. Same window logic as insurance: lifetime runs
+    // from the vehicle's first record to today, a month view is that month.
+    // Split across lodges by the same km share.
+    let recurring = 0, oneOff = 0, depreciation = 0, byKind = {};
+    {
+      const window = inMonth
+        ? monthWindow
+        : (d.firstSeen ? { windowStart: d.firstSeen, windowEnd: now } : null);
+      if (window) {
+        const kmShown = locIds.reduce((s,lid)=>s+spread(d.readingsByLoc[lid]), 0);
+        const kmEvery = everyLoc.reduce((s,lid)=>s+spread(d.readingsByLoc[lid]), 0);
+        const share = kmEvery > 0 ? kmShown / kmEvery : (locIds.length >= everyLoc.length ? 1 : 0);
+        const rc = runningCostsFor({ vehicleId: id, costRows: vehicleCosts, assets, ...window });
+        recurring = rc.recurring * share; oneOff = rc.oneOff * share; depreciation = rc.depreciation * share;
+        byKind = rc.byKind;
+      }
+    }
+    const fixed = insurance + recurring + depreciation;   // what it costs to own it, driven or not
+
+    const total = d.fuel + d.parts + d.repairs + insurance + recurring + oneOff + depreciation;
     const readings = d.odomReadings;
     const kmDriven = readings.length >= 2 ? Math.max(...readings) - Math.min(...readings) : null;
     const costPerKm = kmDriven && kmDriven > 0 ? total / kmDriven : null;
-    return { id, ...d, insurance, total, kmDriven, costPerKm };
+    return { id, ...d, insurance, recurring, oneOff, depreciation, fixed, byKind, total, kmDriven, costPerKm };
   })
   .filter(r => r.total > 0)
   .sort((a, b) => b.total - a.total);
@@ -2736,7 +2842,7 @@ export function runningRateFor(vehicleId, costRows) {
   return { rate: null, basis: "none" };
 }
 
-function CostSummary({ locData, fleet, serviceJobs }) {
+function CostSummary({ locData, fleet, serviceJobs, vehicleCosts = [], setVehicleCosts, assets = [], companyId }) {
   const [viewLoc, setViewLoc]         = useState("all");
   const [detailVehicle, setDetailVehicle] = useState(null);
   const [costTab, setCostTab]         = useState("lifetime"); // "lifetime" | "monthly"
@@ -2752,12 +2858,12 @@ function CostSummary({ locData, fleet, serviceJobs }) {
   const price = useMemo(()=>fuelPricesFrom(locData, locsToShow), [locData, viewLoc]);
   // allLocIds is every lodge regardless of the filter — the insurance split
   // needs a vehicle's total usage to work out this lodge's share of it.
-  const computeCosts = (inMonth) => computeVehicleCosts({
-    locData, fleet, locIds: locsToShow, allLocIds: LOCATIONS.map(l=>l.id), inMonth,
+  const computeCosts = (inMonth, monthWindow = null) => computeVehicleCosts({
+    locData, fleet, locIds: locsToShow, allLocIds: LOCATIONS.map(l=>l.id), inMonth, vehicleCosts, assets, monthWindow,
   });
 
   // ── LIFETIME ──
-  const lifetime = useMemo(() => computeCosts(null), [locData, fleet, viewLoc]);
+  const lifetime = useMemo(() => computeCosts(null), [locData, fleet, viewLoc, vehicleCosts, assets]);
   const grand        = lifetime.reduce((s,r) => s + r.total, 0);
   const totalKm       = lifetime.filter(r=>r.kmDriven).reduce((s,r)=>s+(r.kmDriven||0),0);
   const withCpkm      = lifetime.filter(r => r.costPerKm !== null);
@@ -2776,8 +2882,8 @@ function CostSummary({ locData, fleet, serviceJobs }) {
     (monthCursor.y === now.getFullYear() && monthCursor.m >= now.getMonth());
 
   const monthlyRows = useMemo(
-    () => computeCosts(inMonthFilter(monthCursor.y, monthCursor.m)),
-    [locData, fleet, viewLoc, monthCursor]
+    () => computeCosts(inMonthFilter(monthCursor.y, monthCursor.m), { windowStart: new Date(monthCursor.y, monthCursor.m, 1), windowEnd: new Date(monthCursor.y, monthCursor.m + 1, 0) }),
+    [locData, fleet, viewLoc, monthCursor, vehicleCosts, assets]
   );
   const monthTotal = monthlyRows.reduce((s,r)=>s+r.total,0);
   const monthKm    = monthlyRows.filter(r=>r.kmDriven).reduce((s,r)=>s+(r.kmDriven||0),0);
@@ -2862,7 +2968,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
         <div className="tbl-wrap"><table className="tbl">
           <thead><tr>
             <th>Vehicle / Equipment</th><th>Fuel</th><th className="num">Fuel Cost</th><th className="num">Parts</th>
-            <th className="num">Repairs</th><th className="num">Total</th><th className="num">KM Driven</th>
+            <th className="num">Repairs</th><th className="num" title="Insurance + recurring costs + depreciation, plus one-offs">Fixed &amp; other</th><th className="num">Total</th><th className="num">KM Driven</th>
             <th className="num">Cost / KM</th><th>Bar</th>
           </tr></thead>
           <tbody>
@@ -2879,6 +2985,9 @@ function CostSummary({ locData, fleet, serviceJobs }) {
                 <td className="num">{fmtR(r.fuel)}</td>
                 <td className="num">{fmtR(r.parts)}</td>
                 <td className="num">{fmtR(r.repairs)}</td>
+                <td className="num" title={`Insurance ${fmtR(r.insurance||0)} · recurring ${fmtR(r.recurring||0)} · depreciation ${fmtR(r.depreciation||0)} · one-offs ${fmtR(r.oneOff||0)}`}>
+                  {fmtR((r.fixed||0)+(r.oneOff||0))}
+                </td>
                 <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.total)}</td>
                 <td className="num" style={{color:T.muted}}>
                   {r.kmDriven !== null ? <span style={{color:T.cream}}>{r.kmDriven.toLocaleString()} km</span> : <span style={{color:T.border,fontSize:11}}>no odo</span>}
@@ -2897,7 +3006,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
                 </td>
               </tr>
             ))}
-            {lifetime.length===0 && <tr><td colSpan={9} className="empty">No cost data yet</td></tr>}
+            {lifetime.length===0 && <tr><td colSpan={10} className="empty">No cost data yet</td></tr>}
           </tbody>
         </table></div>
 
@@ -2963,7 +3072,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
         <div className="tbl-wrap"><table className="tbl">
           <thead><tr>
             <th>Vehicle / Equipment</th><th>Fuel</th><th className="num">Fuel Cost</th><th className="num">Parts</th>
-            <th className="num">Repairs</th><th className="num">Total</th><th className="num">KM Driven</th>
+            <th className="num">Repairs</th><th className="num" title="Insurance + recurring costs + depreciation, plus one-offs">Fixed &amp; other</th><th className="num">Total</th><th className="num">KM Driven</th>
             <th className="num">Cost / KM</th><th>Bar</th>
           </tr></thead>
           <tbody>
@@ -2980,6 +3089,9 @@ function CostSummary({ locData, fleet, serviceJobs }) {
                 <td className="num">{fmtR(r.fuel)}</td>
                 <td className="num">{fmtR(r.parts)}</td>
                 <td className="num">{fmtR(r.repairs)}</td>
+                <td className="num" title={`Insurance ${fmtR(r.insurance||0)} · recurring ${fmtR(r.recurring||0)} · depreciation ${fmtR(r.depreciation||0)} · one-offs ${fmtR(r.oneOff||0)}`}>
+                  {fmtR((r.fixed||0)+(r.oneOff||0))}
+                </td>
                 <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(r.total)}</td>
                 <td className="num" style={{color:T.muted}}>
                   {r.kmDriven !== null ? <span style={{color:T.cream}}>{r.kmDriven.toLocaleString()} km</span> : <span style={{color:T.border,fontSize:11}}>no odo</span>}
@@ -3025,7 +3137,7 @@ function CostSummary({ locData, fleet, serviceJobs }) {
       </>)}
 
       {detailVehicle && (
-        <VehicleDetail vehicle={detailVehicle} locData={locData} onClose={()=>setDetailVehicle(null)}/>
+        <VehicleDetail vehicle={detailVehicle} locData={locData} onClose={()=>setDetailVehicle(null)} vehicleCosts={vehicleCosts} setVehicleCosts={setVehicleCosts} assets={assets} companyId={companyId}/>
       )}
     </>
   );
@@ -3318,6 +3430,10 @@ function AuthenticatedApp() {
   // Vehicle Register (2026-08-27) — company-wide like fleet, since vehicles
   // move between lodges; the page filters by lodge itself.
   const [vehicleTrips, setVehicleTrips] = useState([]);
+  // Running costs (#488): vehicle_costs rows + the fixed_assets rows linked
+  // to fleet vehicles (depreciation). Both .catch(()=>[]) — pre-migration safe.
+  const [vehicleCosts, setVehicleCosts] = useState([]);
+  const [vehicleAssets, setVehicleAssets] = useState([]);
   const [tripPurposes, setTripPurposes] = useState([]);
   const [hrEmployees, setHrEmployees] = useState([]);
   // Fuel transfers between lodge tanks. Held at the top level rather than
@@ -3352,7 +3468,7 @@ function AuthenticatedApp() {
     try {
       const cf = `company_id=eq.${companyId}`;
       const [fleetRows,dDel,dIss,dDips,transferRows,dOpen,pPurch,pIss,pOpen,partsRows,partIssRows,partPurchRows,repRows,slipRows,partCnRows,
-             tripRows,purposeRows,hrEmpRows,vehicleJobRows] = await Promise.all([
+             tripRows,purposeRows,hrEmpRows,vehicleJobRows,costRows,assetRows] = await Promise.all([
         sb.select("fleet", cf),
         sb.select("diesel_deliveries", cf),
         sb.select("diesel_issues", cf),
@@ -3379,7 +3495,12 @@ function AuthenticatedApp() {
         sb.select("hr_employees", `active=eq.true&${cf}`).catch(()=>[]),
         // Open job cards, for attaching a maintenance trip to one.
         sb.select("maint_jobs", `${cf}&status=in.(scheduled,in_progress,completed)`).catch(()=>[]),
+        // Running costs + depreciation (#488). Only assets linked to a vehicle.
+        sb.select("vehicle_costs", cf).catch(()=>[]),
+        sb.select("fixed_assets", `${cf}&fleet_id=not.is.null&select=id,description,fleet_id,purchase_date,cost_price,depreciation_rate,useful_life_years,disposal_date`).catch(()=>[]),
       ]);
+      setVehicleCosts(costRows||[]);
+      setVehicleAssets(assetRows||[]);
       const slipMap={}; (slipRows||[]).forEach(s=>{slipMap[s.id]=s;});
       setSlips(slipMap);
 
@@ -3715,9 +3836,12 @@ function AuthenticatedApp() {
                                     locId={locId} locData={locData} fleet={fleet} trips={vehicleTrips} setTrips={setVehicleTrips}
                                     purposes={tripPurposes} setPurposes={setTripPurposes}
                                     hrEmployees={hrEmployees} jobs={vehicleJobs}
+                                    vehicleCosts={vehicleCosts} assets={vehicleAssets}
                                     isAdmin={isAdmin} companyId={companyId}/>}
-            {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData} serviceJobs={serviceJobs} companyId={companyId}/>}
-            {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet} serviceJobs={serviceJobs}/>}
+            {page==="fleet"     && isAdmin && <FleetManager fleet={fleet} setFleet={handleSetFleet} sbFleet={sbFleet} locData={locData} serviceJobs={serviceJobs} companyId={companyId}
+                                    vehicleCosts={vehicleCosts} setVehicleCosts={setVehicleCosts} assets={vehicleAssets}/>}
+            {page==="costs"     && isAdmin && <CostSummary locData={locData} fleet={fleet} serviceJobs={serviceJobs}
+                                    vehicleCosts={vehicleCosts} setVehicleCosts={setVehicleCosts} assets={vehicleAssets} companyId={companyId}/>}
             {!isAdmin && (page==="dashboard"||page==="fleet"||page==="costs") && (
               <div className="empty">
                 <div className="empty-icon" style={{fontSize:20,opacity:.3}}>[ ]</div>
@@ -4058,7 +4182,7 @@ function SearchableSelect({ value, onChange, options, placeholder = "Select…",
 // the job alongside labour and materials — which was the point of the whole
 // exercise: internal invoices that carry the real vehicle cost of getting
 // someone to the job, not just their time and parts.
-function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, setPurposes, hrEmployees, jobs, isAdmin, companyId }) {
+function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, setPurposes, hrEmployees, jobs, isAdmin, companyId, vehicleCosts = [], assets = [] }) {
   const blank = { vehicle_id:"", trip_date:todayISO(), driver_employee_id:"", driver_name:"",
                   purpose_id:"", start_km:"", end_km:"", job_id:"", notes:"" };
   const [form, setForm] = useState(blank);
@@ -4092,9 +4216,11 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
   // and most up to date"). Computed across all lodges, since a vehicle's
   // running cost is a property of the vehicle, not of where it happens to be
   // parked.
+  // vehicleCosts + assets (#488): the running rate carries tracker, licence,
+  // depreciation etc. too, so a trip is charged at the full cost per km.
   const costRows = useMemo(
-    ()=>computeVehicleCosts({ locData, fleet, locIds: LOCATIONS.map(l=>l.id) }),
-    [locData, fleet]
+    ()=>computeVehicleCosts({ locData, fleet, locIds: LOCATIONS.map(l=>l.id), vehicleCosts, assets }),
+    [locData, fleet, vehicleCosts, assets]
   );
 
   const vehicleById = useMemo(()=>Object.fromEntries(fleet.map(v=>[v.id,v])),[fleet]);
