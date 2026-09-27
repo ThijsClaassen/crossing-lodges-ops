@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { prepareSlipImages } from "./slipTiles.js";
 import { sb, LOCATIONS, LOC_COLORS } from "./sb.js";
 import { subscribe as subscribeOffline, listRejected, retryRejected, discardEntry, syncNow } from "./offline.js";
 import { supabase } from "./supabaseClient.js";
@@ -92,17 +93,17 @@ function ScanSlipButton({ companyId, locId, onResult, label="Scan / attach slip"
     if(!file)return;
     setNote(""); setBusy(true);
     try{
-      const resized=await resizeImageFile(file);
+      // #500: a long till slip goes as overlapping tiles so the print stays readable (src/slipTiles.js).
+      const { images, storeBlob: resized } = await prepareSlipImages(file);
       const slip = await uploadPurchaseSlip({companyId, locationId:locId, blob:resized});
       let ocr=null;
       try{
-        const base64=await blobToBase64(resized);
-        const res=await fetch("/api/parse-slip",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({image_base64:base64,media_type:"image/jpeg"})});
+        const res=await fetch("/api/parse-slip",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({images})});
         const data=await res.json();
         if(res.ok) ocr=data;
       }catch{ /* OCR failed — the photo is already saved either way */ }
       onResult({ slipId: slip.id, ocr });
-      setNote(ocr ? "Slip photo saved and read — check the fields below." : "Slip photo saved. Could not read it automatically — enter the details below by hand.");
+      setNote(ocr ? (ocr.truncated ? "Slip photo saved and read — it is very long, so the last few lines may be missing. Check the fields below against the slip." : "Slip photo saved and read — check the fields below.") : "Slip photo saved. Could not read it automatically — enter the details below by hand.");
     }catch(err){ setNote("Could not save the slip photo: "+err.message); }
     finally{ setBusy(false); }
   };
