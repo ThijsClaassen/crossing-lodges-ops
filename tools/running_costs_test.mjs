@@ -57,7 +57,7 @@ check('the trip running rate gets them too (this is what Maintenance bills)', /c
 check('Cost Summary passes them, monthly view gets a month window', /\{ windowStart: new Date\(monthCursor\.y, monthCursor\.m, 1\), windowEnd: new Date\(monthCursor\.y, monthCursor\.m \+ 1, 0\) \}/.test(app) && /vehicleCosts, assets, monthWindow,/.test(app))
 check('Cost Summary shows a Fixed & other column with a breakdown', (app.match(/Fixed &amp; other/g) || []).length === 2 && /title=\{`Insurance \$\{fmtR\(r\.insurance\|\|0\)\} · recurring/.test(app))
 check('loads vehicle_costs and linked fixed_assets, pre-migration safe', /sb\.select\("vehicle_costs", cf\)\.catch\(\(\)=>\[\]\)/.test(app) && /fixed_assets", `\$\{cf\}&fleet_id=not\.is\.null&select=/.test(app))
-check('Running costs tab on the vehicle: add + remove', /label:`Running costs \(\$\{myCosts\.length\}\)`/.test(app) && /sb\.insert\("vehicle_costs", row\)/.test(app) && /sb\.delete\("vehicle_costs", c\.id\)/.test(app))
+check('Running costs live in the vehicle drawer (edit page), not the history modal (#509)', /\{ id:"costs",    label:"Running costs" \}/.test(app) && /sb\.insert\("vehicle_costs", row\)/.test(app) && /sb\.delete\("vehicle_costs", c\.id\)/.test(app) && !/label:`Running costs \(/.test(app))
 check('says when no asset is linked (no depreciation counted)', /No fixed asset linked to this vehicle, so no depreciation is counted/.test(app))
 const sql = read('add_vehicle_running_costs.sql').replace(/--[^\n]*/g, '')
 check('vehicle_costs: kind free text, period constrained, dates sane', /period\s+text not null check \(period in \('monthly', 'annual', 'once'\)\)/.test(sql) && /end_date is null or end_date >= start_date/.test(sql) && !/kind\s+text not null check/.test(sql))

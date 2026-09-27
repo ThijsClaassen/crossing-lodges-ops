@@ -2019,31 +2019,8 @@ function FleetAlerts({ fleet, locData, onOpenVehicle, serviceJobs }) {
 }
 
 // ─── VEHICLE DETAIL ──────────────────────────────────────────────────────────
-function VehicleDetail({ vehicle, locData, onClose, vehicleCosts = [], setVehicleCosts, assets = [], companyId }) {
+function VehicleDetail({ vehicle, locData, onClose }) {
   const [tab, setTab] = useState("repairs");
-  // Running costs (#488): the vehicle's own vehicle_costs rows, and its
-  // fixed-asset rows (depreciation) from the Finance Dashboard register.
-  const myCosts  = useMemo(()=> (vehicleCosts||[]).filter(c=>c.vehicle_id===vehicle.id).sort((a,b)=>String(b.start_date).localeCompare(String(a.start_date))), [vehicleCosts, vehicle.id]);
-  const myAssets = useMemo(()=> (assets||[]).filter(a=>a.fleet_id===vehicle.id), [assets, vehicle.id]);
-  const [cForm, setCForm] = useState({ kind:"tracker", description:"", amount:"", period:"monthly", start_date:todayISO(), end_date:"" });
-  const [cErr, setCErr] = useState("");
-  async function addCost() {
-    setCErr("");
-    const amount = parseFloat(cForm.amount);
-    if(!(amount>=0)) return setCErr("Enter the amount.");
-    if(!cForm.start_date) return setCErr(cForm.period==="once" ? "Enter the date." : "Enter the start date.");
-    const row = { id:uid(), company_id:companyId, vehicle_id:vehicle.id, kind:cForm.kind, description:cForm.description.trim()||null,
-      amount, period:cForm.period, start_date:cForm.start_date, end_date: cForm.period==="once" ? null : (cForm.end_date||null), notes:null };
-    try {
-      await sb.insert("vehicle_costs", row);
-      setVehicleCosts?.(p=>[row, ...p]);
-      setCForm(f=>({ ...f, description:"", amount:"" }));
-    } catch(ex){ setCErr(ex.message); }
-  }
-  async function removeCost(c) {
-    if(!window.confirm(`Remove ${KIND_LABEL[c.kind]||c.kind} ${fmtR(c.amount)}?`)) return;
-    try { await sb.delete("vehicle_costs", c.id); setVehicleCosts?.(p=>p.filter(x=>x.id!==c.id)); } catch(ex){ setCErr(ex.message); }
-  }
 
   // THE SAME PRICES THE COST SUMMARY USES (2026-09-24).
   //
@@ -2130,7 +2107,6 @@ function VehicleDetail({ vehicle, locData, onClose, vehicleCosts = [], setVehicl
     { id:"repairs", label:`Repairs (${data.repairs.length})` },
     { id:"parts",   label:`Parts (${data.parts.length})` },
     { id:"fuel",    label:`Fuel (${data.fuel.length})` },
-    { id:"costs",   label:`Running costs (${myCosts.length})` },
   ];
 
   return (
@@ -2262,70 +2238,293 @@ function VehicleDetail({ vehicle, locData, onClose, vehicleCosts = [], setVehicl
           </table></div>
         )}
 
-        {tab==="costs" && (
-          <div>
-            <div style={{fontSize:11,color:T.muted,marginBottom:8,lineHeight:1.5}}>
-              What this vehicle costs beyond fuel, parts, repairs and insurance: tracker, licence disk, roadworthy, radio licence
-              (recurring), and tolls, fines, towing, cleaning (one-off). Tyres go under Repairs. All of it feeds the cost per km
-              and therefore what Maintenance charges for a trip.
-            </div>
-            {myAssets.length>0 ? (
-              <div style={{fontSize:12,marginBottom:8}}>
-                Depreciation (from the Fixed Asset Register): {myAssets.map(a=>`${a.description} — R ${fmtNum(Math.round((Number(a.cost_price)*Number(a.depreciation_rate))/12))}/month${a.disposal_date?" (disposed)":""}`).join("; ")}
-              </div>
-            ) : (
-              <div style={{fontSize:12,color:T.muted,marginBottom:8}}>
-                No fixed asset linked to this vehicle, so no depreciation is counted. Link it in the Finance Dashboard → Fixed Assets (Vehicle column).
-              </div>
-            )}
-            <div className="grid2">
-              <div className="field"><label>Cost</label>
-                <select value={cForm.kind} onChange={e=>{ const k=COST_KINDS.find(x=>x.id===e.target.value); setCForm(f=>({...f, kind:e.target.value, period:k?.defaultPeriod||f.period})); }}>
-                  {COST_KINDS.map(k=><option key={k.id} value={k.id}>{k.label}</option>)}
-                </select>
-              </div>
-              <div className="field"><label>How often</label>
-                <select value={cForm.period} onChange={e=>setCForm(f=>({...f,period:e.target.value}))}>
-                  {PERIODS.map(p=><option key={p} value={p}>{p==="once"?"once (dated)":p}</option>)}
-                </select>
-              </div>
-              <div className="field"><label>Amount (R{cForm.period==="monthly"?" per month":cForm.period==="annual"?" per year":""})</label>
-                <input type="number" inputMode="decimal" min="0" step="0.01" value={cForm.amount} onChange={e=>setCForm(f=>({...f,amount:e.target.value}))}/></div>
-              <div className="field"><label>Description</label>
-                <input type="text" placeholder="e.g. Cartrack" value={cForm.description} onChange={e=>setCForm(f=>({...f,description:e.target.value}))}/></div>
-              <div className="field"><label>{cForm.period==="once"?"Date":"From"}</label>
-                <input type="date" value={cForm.start_date} onChange={e=>setCForm(f=>({...f,start_date:e.target.value}))}/></div>
-              {cForm.period!=="once" && (
-                <div className="field"><label>Until (blank = still running)</label>
-                  <input type="date" value={cForm.end_date} onChange={e=>setCForm(f=>({...f,end_date:e.target.value}))}/></div>
-              )}
-            </div>
-            {cErr && <div style={{color:T.danger,fontSize:12,marginBottom:6}}>{cErr}</div>}
-            <button className="btn btn-primary btn-sm" onClick={addCost}>+ Add cost</button>
-            <div className="tbl-wrap" style={{marginTop:10}}><table className="tbl" style={{minWidth:0}}>
-              <thead><tr><th>Cost</th><th>How often</th><th className="num">Amount</th><th>From / date</th><th>Until</th><th></th></tr></thead>
-              <tbody>
-                {myCosts.map(c=>(
-                  <tr key={c.id}>
-                    <td>{KIND_LABEL[c.kind]||c.kind}{c.description?<span style={{color:T.muted}}> — {c.description}</span>:null}</td>
-                    <td>{c.period}</td>
-                    <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(c.amount)}</td>
-                    <td className="mono" style={{fontSize:11}}>{c.start_date}</td>
-                    <td className="mono" style={{fontSize:11}}>{c.period==="once"?"—":(c.end_date||"running")}</td>
-                    <td><button className="btn btn-danger btn-sm" onClick={()=>removeCost(c)}>Remove</button></td>
-                  </tr>
-                ))}
-                {myCosts.length===0&&<tr><td colSpan={6} className="empty">No running costs entered yet</td></tr>}
-              </tbody>
-            </table></div>
-          </div>
-        )}
-
         <div style={{display:"flex",gap:9,marginTop:16}}>
           <button className="btn btn-ghost" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── DRAWER ─────────────────────────────────────────────────────────────────
+// The detail pattern (readability pass, 2026-09-27; Thijs chose tabs in a side
+// drawer over a centred pop-up). One component, used for a vehicle first and
+// for everything else after: title + meta, tabs, scrolling body, fixed footer.
+// Esc closes; clicking the scrim closes.
+function Drawer({ title, meta, tabs, tab, onTab, onClose, footer, children }) {
+  useEffect(()=>{
+    const onKey = e => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return ()=>window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <>
+      <div className="drawer-scrim" onClick={onClose}/>
+      <aside className="drawer" role="dialog" aria-label={title}>
+        <div className="drawer-head">
+          <div className="drawer-title">
+            <div><h2>{title}</h2>{meta && <div className="drawer-meta">{meta}</div>}</div>
+            <button className="drawer-x" onClick={onClose} title="Close (Esc)">×</button>
+          </div>
+          {tabs && (
+            <div className="drawer-tabs">
+              {tabs.map(t=>(
+                <button key={t.id} className={tab===t.id?"active":""} onClick={()=>onTab(t.id)}>
+                  {t.label}{t.count!=null && <span className="n">{t.count}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="drawer-body">{children}</div>
+        {footer && <div className="drawer-foot">{footer}</div>}
+      </aside>
+    </>
+  );
+}
+
+// The vehicle, in the drawer. Tabs: Basics · Drivers · Identity & insurance ·
+// Servicing · Running costs (#509 — moved here from VehicleDetail, where it
+// sat with the history; Thijs: it belongs "where we have all other
+// information of the car when it comes to cost and info").
+const VEHICLE_TABS = [
+  { id:"basics",   label:"Basics" },
+  { id:"drivers",  label:"Drivers" },
+  { id:"identity", label:"Identity & insurance" },
+  { id:"service",  label:"Servicing" },
+  { id:"costs",    label:"Running costs" },
+];
+
+function VehicleDrawer({ form, setForm, isNew, onSave, onCancel, onRemove, companyId, vehicleCosts = [], setVehicleCosts, assets = [], hrEmployees = [] }) {
+  const [tab, setTab] = useState("basics");
+  const isEquipment = form.category === "equipment";
+  const tabs = VEHICLE_TABS
+    .filter(t => !isEquipment || (t.id !== "drivers"))
+    .map(t => t.id === "costs" ? { ...t, count: (vehicleCosts||[]).filter(c=>c.vehicle_id===form.id).length } : t);
+  const f = (k) => (e) => setForm(x => ({ ...x, [k]: e && e.target ? e.target.value : e }));
+
+  // Drivers tab: who qualifies today, from the same RPC the trip log uses.
+  const [drivers, setDrivers] = useState(null);
+  useEffect(()=>{
+    if (tab !== "drivers" || (!form.required_licence_class && !form.requires_pdp)) { setDrivers(null); return; }
+    let cancelled = false;
+    supabase.rpc("drivers_for_vehicle", { p_company_id: companyId, p_required_class: form.required_licence_class || null, p_needs_pdp: !!form.requires_pdp, p_on: todayISO() })
+      .then(({ data })=>{ if(!cancelled) setDrivers(Array.isArray(data) ? data : []); })
+      .catch(()=>{ if(!cancelled) setDrivers([]); });
+    return ()=>{ cancelled = true; };
+  }, [tab, form.required_licence_class, form.requires_pdp, companyId]);
+
+  // Running costs (moved from VehicleDetail, #509)
+  const myCosts  = useMemo(()=> (vehicleCosts||[]).filter(c=>c.vehicle_id===form.id).sort((a,b)=>String(b.start_date).localeCompare(String(a.start_date))), [vehicleCosts, form.id]);
+  const myAssets = useMemo(()=> (assets||[]).filter(a=>a.fleet_id===form.id), [assets, form.id]);
+  const [cForm, setCForm] = useState({ kind:"tracker", description:"", amount:"", period:"monthly", start_date:todayISO(), end_date:"" });
+  const [cErr, setCErr] = useState("");
+  async function addCost() {
+    setCErr("");
+    const amount = parseFloat(cForm.amount);
+    if(!(amount>=0)) return setCErr("Enter the amount.");
+    if(!cForm.start_date) return setCErr(cForm.period==="once" ? "Enter the date." : "Enter the start date.");
+    const row = { id:uid(), company_id:companyId, vehicle_id:form.id, kind:cForm.kind, description:cForm.description.trim()||null,
+      amount, period:cForm.period, start_date:cForm.start_date, end_date: cForm.period==="once" ? null : (cForm.end_date||null), notes:null };
+    try { await sb.insert("vehicle_costs", row); setVehicleCosts?.(p=>[row, ...p]); setCForm(x=>({ ...x, description:"", amount:"" })); }
+    catch(ex){ setCErr(ex.message); }
+  }
+  async function removeCost(c) {
+    if(!window.confirm(`Remove ${KIND_LABEL[c.kind]||c.kind} ${fmtR(c.amount)}?`)) return;
+    try { await sb.delete("vehicle_costs", c.id); setVehicleCosts?.(p=>p.filter(x=>x.id!==c.id)); } catch(ex){ setCErr(ex.message); }
+  }
+
+  const canSave = form.name.trim() && form.id.trim() && !(form.self_serviced && !form.service_location_id);
+  const meta = [form.id, form.make_model, form.model_year, form.fuel].filter(Boolean).join(" · ");
+
+  return (
+    <Drawer
+      title={isNew ? "New vehicle / equipment" : (form.name || form.id)}
+      meta={isNew ? "Fill in the basics first; the other tabs can wait." : meta}
+      tabs={tabs} tab={tab} onTab={setTab} onClose={onCancel}
+      footer={<>
+        <button className="btn btn-primary" onClick={onSave} disabled={!canSave} style={{opacity:canSave?1:.5}}>{isNew?"Add vehicle":"Save changes"}</button>
+        <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        {!isNew && <button className="btn btn-danger btn-sm" style={{marginLeft:6}} onClick={onRemove}>Remove</button>}
+        {form.self_serviced && !form.service_location_id && <span className="hint" style={{color:T.danger}}>Pick where job cards go (Servicing)</span>}
+      </>}
+    >
+      {tab==="basics" && (
+        <div className="grid2">
+          <div className="field full"><label>Display name</label><input type="text" placeholder="e.g. Toyota Hilux GD6 — Martin" value={form.name} onChange={f("name")}/></div>
+          <div className="field"><label>ID / registration</label>
+            <input type="text" placeholder="e.g. KZC 123 L" value={form.id} onChange={f("id")} disabled={!isNew} style={{opacity:isNew?1:.6}}/>
+            {!isNew && <div className="help">Cannot be changed after creation.</div>}
+          </div>
+          <div className="field"><label>Type</label>
+            <select value={form.category} onChange={f("category")}><option value="vehicle">Vehicle</option><option value="equipment">Equipment</option></select>
+          </div>
+          <div className="field"><label>Fuel</label>
+            <select value={form.fuel} onChange={f("fuel")}><option value="diesel">Diesel</option><option value="petrol">Petrol</option></select>
+          </div>
+        </div>
+      )}
+
+      {tab==="drivers" && (
+        <>
+          <div className="grid2">
+            <div className="field"><label>Licence code needed</label>
+              <select value={form.required_licence_class||""} onChange={f("required_licence_class")}>
+                <option value="">— not set —</option>
+                {LICENCE_CLASSES.map(c=><option key={c} value={c}>Code {c}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Needs a PDP?</label>
+              <select value={form.requires_pdp?"yes":"no"} onChange={e=>setForm(x=>({...x,requires_pdp:e.target.value==="yes"}))}>
+                <option value="no">No</option><option value="yes">Yes — carries passengers for reward</option>
+              </select>
+            </div>
+            <div className="field full"><div className="drawer-note">
+              The trip log checks the driver's licence in HR against this. Anyone without the code, or with an expired one, is shown greyed with the reason rather than hidden. Leave blank to skip the check.
+            </div></div>
+          </div>
+          {(form.required_licence_class || form.requires_pdp) && (
+            <>
+              <div className="drawer-sect">Who qualifies today</div>
+              {drivers===null ? <div style={{fontSize:12,color:T.muted}}>Checking…</div> : (
+                <div className="tbl-wrap"><table className="tbl" style={{minWidth:0}}>
+                  <thead><tr><th>Driver</th><th>Licence</th><th>PDP</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {drivers.map(d=>(
+                      <tr key={d.employee_id}>
+                        <td>{d.employee_name}</td>
+                        <td style={{fontSize:12}}>{d.licence_class ? `Code ${d.licence_class}${d.licence_expires?` · exp ${d.licence_expires}`:""}` : <span style={{color:T.muted}}>none</span>}</td>
+                        <td style={{fontSize:12}}>{d.pdp_expires ? `exp ${d.pdp_expires}` : <span style={{color:T.muted}}>—</span>}</td>
+                        <td>{d.qualifies ? <span className="badge badge-neu" style={{color:T.ok}}>qualifies</span> : <span className="badge badge-neu" style={{color:T.danger}}>{d.reason}</span>}</td>
+                      </tr>
+                    ))}
+                    {drivers.length===0 && <tr><td colSpan={4} className="empty">No active staff in HR</td></tr>}
+                  </tbody>
+                </table></div>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {tab==="identity" && (
+        <>
+          <div className="grid2">
+            <div className="field"><label>Make / model</label><input type="text" placeholder="e.g. Toyota Land Cruiser 79 4.2D" value={form.make_model} onChange={f("make_model")}/></div>
+            <div className="field"><label>Year</label><input type="number" inputMode="numeric" min="1950" max="2100" value={form.model_year} onChange={f("model_year")}/></div>
+            <div className="field full"><label>VIN</label><input type="text" value={form.vin} onChange={f("vin")}/></div>
+          </div>
+          <div className="drawer-sect">Insurance</div>
+          <div className="grid2">
+            <div className="field"><label>Insurer</label><input type="text" placeholder="e.g. Santam" value={form.insurer} onChange={f("insurer")}/></div>
+            <div className="field"><label>Policy number</label><input type="text" value={form.policy_number} onChange={f("policy_number")}/></div>
+            <div className="field"><label>Premium (R per month)</label><input type="number" inputMode="decimal" min="0" step="0.01" placeholder="e.g. 1250.00" value={form.insurance_monthly ?? ""} onChange={f("insurance_monthly")}/></div>
+            <div className="field full"><div className="help">
+              The premium feeds the cost per km on the Cost Summary and what maintenance trips are charged; leave it blank if the vehicle isn't insured separately. Insurer, policy and VIN go into the claim pack in the Finance Dashboard when a vehicle is written off.
+            </div></div>
+          </div>
+        </>
+      )}
+
+      {tab==="service" && (
+        <>
+          <div className="drawer-sect">Licence disk</div>
+          <div className="grid2">
+            <div className="field"><label>Expiry date</label>
+              <DateField value={form.license_expiry} onChange={v=>setForm(x=>({...x,license_expiry:v}))}/>
+              <div className="help">You will be alerted {LICENSE_WARN_DAYS} days before this date.</div>
+            </div>
+          </div>
+          <div className="drawer-sect">Service schedule</div>
+          <div className="grid2">
+            <div className="field"><label>Last service date</label><DateField value={form.last_service_date} onChange={v=>setForm(x=>({...x,last_service_date:v}))}/></div>
+            <div className="field"><label>Interval (months)</label><input type="number" inputMode="decimal" min="0" placeholder="e.g. 12" value={form.service_interval_months} onChange={f("service_interval_months")}/></div>
+            <div className="field"><label>Odometer at last service (km)</label><input type="number" inputMode="decimal" min="0" placeholder="e.g. 85000" value={form.last_service_km} onChange={f("last_service_km")}/></div>
+            <div className="field"><label>Interval (km)</label><input type="number" inputMode="decimal" min="0" placeholder="e.g. 10000" value={form.service_interval_km} onChange={f("service_interval_km")}/></div>
+            <div className="field full"><div className="help">Fill in the date fields, the kilometre fields, or both — whichever falls due first triggers the alert. Leave blank to skip service tracking.</div></div>
+          </div>
+          <div className="drawer-sect">Who services it</div>
+          <div className="grid2">
+            <div className="field"><label>Serviced in-house?</label>
+              <select value={form.self_serviced?"yes":"no"} onChange={e=>setForm(x=>({...x,self_serviced:e.target.value==="yes", service_location_id: e.target.value==="yes" ? x.service_location_id : ""}))}>
+                <option value="no">No — external workshop</option><option value="yes">Yes — the maintenance team</option>
+              </select>
+            </div>
+            {form.self_serviced && (
+              <div className="field"><label>Send job cards to</label>
+                <select value={form.service_location_id||""} onChange={f("service_location_id")}>
+                  <option value="">Select lodge…</option>
+                  {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {tab==="costs" && (
+        isNew ? <div className="drawer-note">Save the vehicle first — running costs attach to its registration.</div> : (
+        <>
+          <div className="drawer-note">
+            What this vehicle costs beyond fuel, parts, repairs and insurance. Tyres go under Repairs. All of it feeds the cost per km and therefore what Maintenance charges for a trip.
+          </div>
+          <div className="drawer-sect">Depreciation — from the Fixed Asset Register</div>
+          {myAssets.length>0 ? (
+            <div className="tbl-wrap"><table className="tbl" style={{minWidth:0}}><tbody>
+              {myAssets.map(a=>(
+                <tr key={a.id}><td>{a.description}</td>
+                  <td style={{fontSize:12,color:T.muted}}>{fmtR(a.cost_price)} · {Math.round(Number(a.depreciation_rate)*100)} % / yr{a.purchase_date?` · bought ${a.purchase_date}`:""}{a.disposal_date?" · disposed":""}</td>
+                  <td className="num" style={{fontWeight:700,color:T.gold}}>R {fmtNum(Math.round((Number(a.cost_price)*Number(a.depreciation_rate))/12))} / month</td></tr>
+              ))}
+            </tbody></table></div>
+          ) : (
+            <div style={{fontSize:12,color:T.muted}}>No fixed asset linked to this vehicle, so no depreciation is counted. Link it in the Finance Dashboard → Fixed Assets (Vehicle column).</div>
+          )}
+          <div className="drawer-sect">Recurring and one-off costs</div>
+          <div className="tbl-wrap"><table className="tbl" style={{minWidth:0}}>
+            <thead><tr><th>Cost</th><th>How often</th><th className="num">Amount</th><th>From / date</th><th>Until</th><th></th></tr></thead>
+            <tbody>
+              {myCosts.map(c=>(
+                <tr key={c.id}>
+                  <td>{KIND_LABEL[c.kind]||c.kind}{c.description?<span style={{color:T.muted}}> — {c.description}</span>:null}</td>
+                  <td>{c.period}</td>
+                  <td className="num" style={{fontWeight:700,color:T.gold}}>{fmtR(c.amount)}</td>
+                  <td className="mono" style={{fontSize:11}}>{c.start_date}</td>
+                  <td className="mono" style={{fontSize:11}}>{c.period==="once"?"—":(c.end_date||"running")}</td>
+                  <td className="num"><button className="btn btn-ghost btn-sm" onClick={()=>removeCost(c)}>Remove</button></td>
+                </tr>
+              ))}
+              {myCosts.length===0&&<tr><td colSpan={6} className="empty">No running costs entered yet</td></tr>}
+            </tbody>
+          </table></div>
+          <div className="drawer-sect">Add a cost</div>
+          <div className="grid2">
+            <div className="field"><label>Cost</label>
+              <select value={cForm.kind} onChange={e=>{ const k=COST_KINDS.find(x=>x.id===e.target.value); setCForm(x=>({...x, kind:e.target.value, period:k?.defaultPeriod||x.period})); }}>
+                {COST_KINDS.map(k=><option key={k.id} value={k.id}>{k.label}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>How often</label>
+              <select value={cForm.period} onChange={e=>setCForm(x=>({...x,period:e.target.value}))}>
+                {PERIODS.map(p=><option key={p} value={p}>{p==="once"?"once (dated)":p}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Amount (R{cForm.period==="monthly"?" per month":cForm.period==="annual"?" per year":""})</label>
+              <input type="number" inputMode="decimal" min="0" step="0.01" value={cForm.amount} onChange={e=>setCForm(x=>({...x,amount:e.target.value}))}/></div>
+            <div className="field"><label>Description</label>
+              <input type="text" placeholder="e.g. Cartrack" value={cForm.description} onChange={e=>setCForm(x=>({...x,description:e.target.value}))}/></div>
+            <div className="field"><label>{cForm.period==="once"?"Date":"From"}</label>
+              <input type="date" value={cForm.start_date} onChange={e=>setCForm(x=>({...x,start_date:e.target.value}))}/></div>
+            {cForm.period!=="once" && (
+              <div className="field"><label>Until (blank = still running)</label>
+                <input type="date" value={cForm.end_date} onChange={e=>setCForm(x=>({...x,end_date:e.target.value}))}/></div>
+            )}
+          </div>
+          {cErr && <div style={{color:T.danger,fontSize:12,margin:"6px 0"}}>{cErr}</div>}
+          <div style={{marginTop:10}}><button className="btn btn-ghost" onClick={addCost}>+ Add cost</button></div>
+        </>)
+      )}
+    </Drawer>
   );
 }
 
@@ -2451,159 +2650,15 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
       ))}
 
       {detailVehicle && (
-        <VehicleDetail vehicle={detailVehicle} locData={locData||{}} onClose={()=>setDetailVehicle(null)} vehicleCosts={vehicleCosts} setVehicleCosts={setVehicleCosts} assets={assets} companyId={companyId}/>
+        <VehicleDetail vehicle={detailVehicle} locData={locData||{}} onClose={()=>setDetailVehicle(null)}/>
       )}
 
       {showForm && (
-        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
-          <div className="modal" style={{maxWidth:440}}>
-            <div className="modal-title">{editEntry?"Edit":"Add"} <span>Vehicle / Equipment</span></div>
-            <div className="field"><label>Display Name</label><input type="text" placeholder="e.g. Toyota Hilux GD6 — Martin" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></div>
-            <div className="field">
-              <label>ID / Registration</label>
-              <input type="text" placeholder="e.g. GD6 Martin" value={form.id} onChange={e=>setForm(f=>({...f,id:e.target.value}))} disabled={!!editEntry}
-                style={{opacity:editEntry?0.5:1}}/>
-              {editEntry && <div style={{fontSize:11,color:T.muted,marginTop:3}}>ID cannot be changed after creation</div>}
-            </div>
-            <div className="grid2">
-              <div className="field"><label>Type</label>
-                <select value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
-                  <option value="vehicle">Vehicle</option>
-                  <option value="equipment">Equipment</option>
-                </select>
-              </div>
-              <div className="field"><label>Fuel</label>
-                <select value={form.fuel} onChange={e=>setForm(f=>({...f,fuel:e.target.value}))}>
-                  <option value="diesel">Diesel</option>
-                  <option value="petrol">Petrol</option>
-                </select>
-              </div>
-            </div>
-
-            {form.category!=="equipment" && (
-              <>
-                <div className="section-title" style={{marginTop:6}}>Who may drive it</div>
-                <div className="grid2">
-                  <div className="field"><label>Licence code needed</label>
-                    <select value={form.required_licence_class||""} onChange={e=>setForm(f=>({...f,required_licence_class:e.target.value}))}>
-                      <option value="">— not set —</option>
-                      {LICENCE_CLASSES.map(c=><option key={c} value={c}>Code {c}</option>)}
-                    </select>
-                  </div>
-                  <div className="field"><label>Needs a PDP?</label>
-                    <select value={form.requires_pdp?"yes":"no"} onChange={e=>setForm(f=>({...f,requires_pdp:e.target.value==="yes"}))}>
-                      <option value="no">No</option>
-                      <option value="yes">Yes — carries passengers for reward</option>
-                    </select>
-                  </div>
-                </div>
-                <div style={{fontSize:11,color:T.muted,marginTop:-4,marginBottom:8,lineHeight:1.5}}>
-                  The trip log checks the driver's licence in HR against this. Anyone without the code, or with an
-                  expired one, is shown greyed with the reason rather than hidden. Leave blank to skip the check.
-                </div>
-              </>
-            )}
-
-            <div className="section-title" style={{marginTop:6}}>Licence Disk</div>
-            <div className="field"><label>Expiry Date</label>
-              <DateField value={form.license_expiry} onChange={v=>setForm(f=>({...f,license_expiry:v}))}/>
-              <div style={{fontSize:11,color:T.muted,marginTop:4}}>
-                You will be alerted {LICENSE_WARN_DAYS} days before this date.
-              </div>
-            </div>
-
-            <div className="section-title" style={{marginTop:12}}>Service Schedule</div>
-            <div style={{fontSize:11,color:T.muted,marginBottom:10,lineHeight:1.55}}>
-              Fill in either the date fields, the kilometre fields, or both.
-              With both, whichever falls due first triggers the alert. Leave blank to skip service tracking.
-            </div>
-            <div className="grid2">
-              <div className="field"><label>Last Service Date</label>
-                <DateField value={form.last_service_date} onChange={v=>setForm(f=>({...f,last_service_date:v}))}/>
-              </div>
-              <div className="field"><label>Interval (months)</label>
-                <input type="number" inputMode="decimal" min="0" placeholder="e.g. 12" value={form.service_interval_months}
-                  onChange={e=>setForm(f=>({...f,service_interval_months:e.target.value}))}/>
-              </div>
-              <div className="field"><label>Odometer at Last Service (km)</label>
-                <input type="number" inputMode="decimal" min="0" placeholder="e.g. 82000" value={form.last_service_km}
-                  onChange={e=>setForm(f=>({...f,last_service_km:e.target.value}))}/>
-              </div>
-              <div className="field"><label>Interval (km)</label>
-                <input type="number" inputMode="decimal" min="0" placeholder="e.g. 10000" value={form.service_interval_km}
-                  onChange={e=>setForm(f=>({...f,service_interval_km:e.target.value}))}/>
-              </div>
-            </div>
-
-            {form.category!=="equipment" && (
-              <>
-                <div className="section-title" style={{marginTop:12}}>Identity &amp; insurance</div>
-                <div style={{fontSize:11,color:T.muted,marginBottom:8,lineHeight:1.5}}>
-                  What the insurer asks for when a vehicle is written off. The Finance Dashboard's claim pack reads these.
-                </div>
-                <div className="grid2">
-                  <div className="field"><label>Make / model</label>
-                    <input type="text" placeholder="e.g. Toyota Land Cruiser 79 4.2D" value={form.make_model} onChange={e=>setForm(f=>({...f,make_model:e.target.value}))}/></div>
-                  <div className="field"><label>Year</label>
-                    <input type="number" inputMode="numeric" min="1950" max="2100" value={form.model_year} onChange={e=>setForm(f=>({...f,model_year:e.target.value}))}/></div>
-                  <div className="field"><label>VIN</label>
-                    <input type="text" value={form.vin} onChange={e=>setForm(f=>({...f,vin:e.target.value}))}/></div>
-                  <div className="field"><label>Insurer</label>
-                    <input type="text" placeholder="e.g. Santam" value={form.insurer} onChange={e=>setForm(f=>({...f,insurer:e.target.value}))}/></div>
-                  <div className="field"><label>Policy number</label>
-                    <input type="text" value={form.policy_number} onChange={e=>setForm(f=>({...f,policy_number:e.target.value}))}/></div>
-                </div>
-              </>
-            )}
-
-            <div className="field" style={{marginBottom:6}}>
-              <label>Insurance Premium (R per month)</label>
-              <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="e.g. 1250.00"
-                value={form.insurance_monthly ?? ""} onChange={e=>setForm(f=>({...f,insurance_monthly:e.target.value}))}/>
-              <div style={{fontSize:11,color:T.muted,marginTop:4}}>
-                What this vehicle costs to insure each month. Unlike fuel and repairs there's no transaction to
-                read it from, so it has to be entered here — it then feeds into the vehicle's cost per km on the
-                Cost Summary, and into what maintenance trips are charged. Leave blank if it isn't insured
-                separately.
-              </div>
-            </div>
-
-
-            <div style={{background:"rgba(184,147,90,.06)",border:`1px solid rgba(184,147,90,.2)`,borderRadius:7,padding:"12px 13px",marginBottom:6}}>
-              <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:form.self_serviced?12:0}}>
-                <input type="checkbox" checked={!!form.self_serviced}
-                  onChange={e=>setForm(f=>({...f,self_serviced:e.target.checked}))}
-                  style={{width:16,height:16,accentColor:T.gold,cursor:"pointer"}}/>
-                <span style={{fontSize:13,fontWeight:600,color:T.cream}}>We service this vehicle ourselves</span>
-              </label>
-              {form.self_serviced && (
-                <>
-                  <div className="field" style={{marginBottom:6}}>
-                    <label>Send job cards to</label>
-                    <select value={form.service_location_id} onChange={e=>setForm(f=>({...f,service_location_id:e.target.value}))}>
-                      <option value="">-- Select location's maintenance calendar --</option>
-                      {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                  </div>
-                  <div style={{fontSize:11,color:T.muted,lineHeight:1.55}}>
-                    When this vehicle comes due for service, a job card is created automatically on
-                    this location's Maintenance app calendar. Add the parts/materials needed over there —
-                    completing it there updates the Last Service Date above.
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div style={{display:"flex",gap:9}}>
-              <button className="btn btn-primary" onClick={save}
-                disabled={form.self_serviced && !form.service_location_id}
-                style={{opacity:(form.self_serviced && !form.service_location_id)?.5:1}}>
-                {editEntry?"Save Changes":"Add to Fleet"}
-              </button>
-              <button className="btn btn-ghost" onClick={()=>setShowForm(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+        <VehicleDrawer
+          form={form} setForm={setForm} isNew={!editEntry}
+          onSave={save} onCancel={()=>setShowForm(false)}
+          onRemove={()=>{ const v = fleet.find(x=>x.id===editEntry); if (v) { remove(v); setShowForm(false); } }}
+          companyId={companyId} vehicleCosts={vehicleCosts} setVehicleCosts={setVehicleCosts} assets={assets}/>
       )}
     </>
   );
@@ -3137,7 +3192,7 @@ function CostSummary({ locData, fleet, serviceJobs, vehicleCosts = [], setVehicl
       </>)}
 
       {detailVehicle && (
-        <VehicleDetail vehicle={detailVehicle} locData={locData} onClose={()=>setDetailVehicle(null)} vehicleCosts={vehicleCosts} setVehicleCosts={setVehicleCosts} assets={assets} companyId={companyId}/>
+        <VehicleDetail vehicle={detailVehicle} locData={locData} onClose={()=>setDetailVehicle(null)}/>
       )}
     </>
   );
