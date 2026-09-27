@@ -4418,6 +4418,39 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
   const totalKm = monthKm.reduce((s,t)=>s+tripKm(t),0);
   const totalCost = monthKm.reduce((s,t)=>s+tripCost(t),0);
   const maintKm = monthKm.filter(t=>t.job_id).reduce((s,t)=>s+tripKm(t),0);
+  const stillOut = visible.filter(isOpen);
+
+  // Readability pass (2026-09-27): the log-a-trip form is a drawer with
+  // everything on ONE screen — Thijs: "all information that my guys need to
+  // give to be done in 1 screen … if they have to navigate over multiple
+  // screens it's going to get worse". No tabs here, ever. The table dropped
+  // to six columns; a trip's readings, licence check and notes open in a
+  // read-only drawer (edits are deliberately not offered — trips feed job
+  // costs and internal billing).
+  const [search, setSearch] = useState("");
+  const [vehFilter, setVehFilter] = useState("");
+  const [purpFilter, setPurpFilter] = useState("");
+  const [monthFilter, setMonthFilter] = useState("this");
+  const [openTrip, setOpenTrip] = useState(null);
+  const thisMonth = new Date().toISOString().slice(0,7);
+  const lastMonth = (()=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); return d.toISOString().slice(0,7); })();
+  const q = search.trim().toLowerCase();
+  const rows = visible
+    .filter(t=>!vehFilter || t.vehicle_id===vehFilter)
+    .filter(t=>!purpFilter || t.purpose_id===purpFilter)
+    .filter(t=>monthFilter==="all" || (t.trip_date||"").slice(0,7)===(monthFilter==="last"?lastMonth:thisMonth))
+    .filter(t=>!q || `${vehicleById[t.vehicle_id]?.name||""} ${t.driver_name||""} ${purposeById[t.purpose_id]?.name||""} ${t.job_id?(jobById[t.job_id]?.name||""):""} ${t.notes||""}`.toLowerCase().includes(q));
+
+  const closeForm = () => { setShowForm(false); setErr(""); };
+  const tripFooter = (
+    <>
+      <button className="btn btn-primary" disabled={saving} onClick={save}>
+        {saving?"Saving…":(form.end_km===""?"Start trip":"Save trip")}
+      </button>
+      <button className="btn btn-ghost" disabled={saving} onClick={closeForm}>Cancel</button>
+      <span className="hint">{err ? <span style={{color:T.danger}}>{err}</span> : form.end_km==="" ? "No end reading yet? It goes to “Still out” until the vehicle is back" : ""}</span>
+    </>
+  );
 
   return (<>
     <div className="strip" style={{marginBottom:14}}>
@@ -4431,29 +4464,88 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
         <div style={{fontSize:10,color:T.muted,marginTop:2}}>Billed to Maintenance jobs</div></div>
       <div className="strip-item"><div className="strip-label">Trips Logged</div>
         <div className="strip-val">{visible.length}</div></div>
+      <div style={{marginLeft:"auto",display:"flex",gap:8,flexWrap:"wrap"}}>
+        {isAdmin && <button className="btn btn-ghost" onClick={()=>setShowPurposes(true)}>Trip purposes</button>}
+        <button className="btn btn-primary" onClick={()=>{setErr("");setShowForm(true);}}>+ Log a trip</button>
+      </div>
     </div>
 
-    <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-      <select value={locFilter} onChange={e=>setLocFilter(e.target.value)}
-        style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
-                fontFamily:"'Inter',sans-serif",fontSize:13,padding:"6px 10px"}}>
+    {stillOut.length > 0 && (
+      <div className="section" style={{marginBottom:14,borderColor:`${T.warn}55`}}>
+        <div className="section-title" style={{color:T.warn}}>Still out ({stillOut.length})</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {stillOut.map(t=>(
+            <div key={t.id} className="chip">
+              <span><b>{vehicleById[t.vehicle_id]?.name||"—"}</b> · {t.driver_name} · {purposeById[t.purpose_id]?.name||"—"} · left {t.trip_date} at {fmtNum(t.start_km)} km</span>
+              {closing?.id===t.id ? (
+                <>
+                  <input type="number" inputMode="decimal" autoFocus value={closeKm}
+                    onChange={e=>setCloseKm(e.target.value)} placeholder="closing km"
+                    onKeyDown={e=>{ if(e.key==="Enter") closeTrip(); }}
+                    style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
+                            fontFamily:"'Inter',sans-serif",fontSize:13,padding:"5px 8px",width:120}}/>
+                  <button className="btn btn-primary btn-sm" onClick={closeTrip}>Save</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>{setClosing(null);setCloseKm("");setCloseErr("");}}>Cancel</button>
+                  {closeErr && <span style={{fontSize:12,color:T.danger}}>{closeErr}</span>}
+                </>
+              ) : (
+                <button className="btn btn-primary btn-sm" onClick={()=>{setClosing(t);setCloseKm("");setCloseErr("");}}>Close trip</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    <div className="toolbar">
+      <input placeholder="Search driver, vehicle, job…" value={search} onChange={e=>setSearch(e.target.value)}/>
+      <select value={vehFilter} onChange={e=>setVehFilter(e.target.value)}>
+        <option value="">All vehicles</option>
+        {fleet.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+      </select>
+      <select value={purpFilter} onChange={e=>setPurpFilter(e.target.value)}>
+        <option value="">All purposes</option>
+        {purposes.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      <select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}>
+        <option value="this">This month</option>
+        <option value="last">Last month</option>
+        <option value="all">All</option>
+      </select>
+      <select value={locFilter} onChange={e=>setLocFilter(e.target.value)}>
         <option value="all">All lodges</option>
         {LOCATIONS.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
       </select>
-      <button className="btn" onClick={()=>setShowForm(v=>!v)}>{showForm?"Cancel":"+ Log a trip"}</button>
-      {isAdmin && <button className="btn btn-ghost" onClick={()=>setShowPurposes(v=>!v)}>
-        {showPurposes?"Hide categories":"Edit categories"}
-      </button>}
     </div>
 
-    {showPurposes && isAdmin && (
-      <TripPurposeManager purposes={purposes} setPurposes={setPurposes} companyId={companyId}/>
-    )}
+    <div className="tbl-wrap"><table className="tbl">
+      <thead><tr>
+        <th>Date</th><th>Trip</th><th className="num">KM</th><th className="num">Cost</th><th>Job card</th><th></th>
+      </tr></thead>
+      <tbody>
+        {rows.map(t=>(
+          <tr key={t.id} className="row-open" onClick={()=>setOpenTrip(t)}>
+            <td className="mono" style={{fontSize:11,whiteSpace:"nowrap"}}>{t.trip_date}</td>
+            <td>
+              <span style={{fontWeight:600}}>{vehicleById[t.vehicle_id]?.name||"—"} · {t.driver_name}</span>
+              {t.driver_qualified===false && <span className="badge badge-neu" style={{marginLeft:6,color:T.danger}} title="Logged with a licence that did not cover this vehicle on the day">unlicensed</span>}
+              <span className="sub2">{purposeById[t.purpose_id]?.name||"—"} · {fmtNum(t.start_km)} → {isOpen(t)?"still out":fmtNum(t.end_km)}</span>
+            </td>
+            <td className="num" style={{fontWeight:600}}>
+              {isOpen(t) ? <span style={{color:T.warn,fontWeight:400,fontSize:11}}>still out</span> : fmtNum(tripKm(t))}</td>
+            <td className="num" style={{color:tripCost(t)?T.gold:T.border}}>{tripCost(t)?fmtR(tripCost(t)):"—"}</td>
+            <td style={{fontSize:11,color:T.muted}}>{t.job_id?(jobById[t.job_id]?.name||"linked"):"—"}</td>
+            <td className="num"><button className="btn btn-ghost btn-sm" onClick={e=>{e.stopPropagation();setOpenTrip(t);}}>Open</button></td>
+          </tr>
+        ))}
+        {rows.length===0 && <tr><td colSpan={6} className="empty">{visible.length===0?"No trips logged yet.":"No trips match those filters."}</td></tr>}
+      </tbody>
+    </table></div>
+    <div style={{fontSize:11,color:T.muted,marginTop:8}}>Showing {rows.length} of {visible.length} · odometer readings, the licence check and notes are in the trip panel — click a row.</div>
 
     {showForm && (
-      <div className="section" style={{marginBottom:14}}>
-        <div className="section-title">Log a trip</div>
-        <div className="grid2">
+      <Drawer title="Log a trip" meta={`${LOCATIONS.find(l=>l.id===(locFilter==="all"?locId:locFilter))?.name||""} · everything on one screen`} onClose={closeForm} footer={tripFooter}>
+        <div className="drawer-grid">
           <div className="field"><label>Vehicle</label>
             <SearchableSelect
               value={form.vehicle_id}
@@ -4465,6 +4557,9 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
                   : " — no cost history yet"}` };
               })}
               placeholder="Search vehicles…"/>
+            {(requirement||needsPdp) && (
+              <div className="help">{pickedVehicle.name} needs {requirement?`Code ${requirement}`:"a licence"}{needsPdp?" + PDP":""}. Staff without it are greyed with the reason.</div>
+            )}
           </div>
           <div className="field"><label>Date</label>
             <input type="date" value={form.trip_date} onChange={e=>setForm(f=>({...f,trip_date:e.target.value}))}/></div>
@@ -4483,20 +4578,18 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
                       : { value:e.id, label:staffName(e), hint:el.reason, disabled:true };
                   })]}
               placeholder="Search staff…"/>
-            {(requirement||needsPdp) && (
-              <div style={{fontSize:11,color:T.muted,marginTop:4}}>
-                {pickedVehicle.name} needs {requirement?`Code ${requirement}`:"a licence"}{needsPdp?" + PDP":""}. Staff without it are greyed with the reason.
-              </div>
-            )}
             {driverCheck && !driverCheck.qualifies && (
-              <div style={{fontSize:11,color:T.danger,marginTop:4}}>{driverCheck.reason} — this driver cannot be logged for this vehicle.</div>
+              <div className="help" style={{color:T.danger}}>{driverCheck.reason} — this driver cannot be logged for this vehicle.</div>
+            )}
+            {driverCheck && driverCheck.qualifies && (
+              <div className="help" style={{color:T.ok}}>Qualifies today{driverCheck.licence_class?` — Code ${driverCheck.licence_class}`:""}.</div>
             )}
           </div>
-          {!form.driver_employee_id && (
+          {!form.driver_employee_id ? (
             <div className="field"><label>Driver name</label>
               <input value={form.driver_name} onChange={e=>setForm(f=>({...f,driver_name:e.target.value}))}
                 placeholder="e.g. guest, contractor"/></div>
-          )}
+          ) : <div className="field"/>}
 
           <div className="field"><label>Purpose</label>
             <select value={form.purpose_id} onChange={e=>setForm(f=>({...f,purpose_id:e.target.value,job_id:""}))}>
@@ -4504,7 +4597,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
               {purposes.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
-          {isMaintenanceTrip && (
+          {isMaintenanceTrip ? (
             <div className="field"><label>Job card</label>
               <SearchableSelect
                 value={form.job_id}
@@ -4512,113 +4605,94 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
                 options={(jobs||[]).map(j=>({ value:j.id,
                   label:`${j.name}${j.due_date?` — due ${j.due_date}`:""}${j.status==="completed"?" (completed)":""}` }))}
                 placeholder="Search job cards…"/>
+              <div className="help">The trip's cost lands on that job.</div>
             </div>
-          )}
+          ) : <div className="field"/>}
 
           <div className="field"><label>Odometer — start</label>
             <input type="number" inputMode="decimal" value={form.start_km}
-              onChange={e=>setForm(f=>({...f,start_km:e.target.value}))}/></div>
+              onChange={e=>setForm(f=>({...f,start_km:e.target.value}))}/>
+            {form.vehicle_id && lastKmByVehicle[form.vehicle_id]!=null && (
+              parseFloat(form.start_km) < lastKmByVehicle[form.vehicle_id]
+                ? <div className="help" style={{color:T.warn}}>&#9888; Last left at {fmtNum(lastKmByVehicle[form.vehicle_id])} km. A lower opening reading usually means a trip wasn't logged, or a digit slipped.</div>
+                : <div className="help">Last known reading: {fmtNum(lastKmByVehicle[form.vehicle_id])} km.</div>
+            )}
+          </div>
           <div className="field"><label>Odometer — end <span style={{color:T.muted,fontWeight:400}}>(optional)</span></label>
             <input type="number" inputMode="decimal" value={form.end_km} placeholder="leave blank if still out"
-              onChange={e=>setForm(f=>({...f,end_km:e.target.value}))}/></div>
-        </div>
-
-        {form.vehicle_id && lastKmByVehicle[form.vehicle_id]!=null && parseFloat(form.start_km) < lastKmByVehicle[form.vehicle_id] && (
-          <div style={{fontSize:12,color:T.warn,marginTop:6}}>
-            &#9888; This vehicle was last left at {fmtNum(lastKmByVehicle[form.vehicle_id])} km. A lower opening
-            reading usually means a trip wasn't logged, or a digit slipped.
-          </div>
-        )}
-        {km>0 && (
-          <div style={{fontSize:12,color:T.muted,marginTop:6}}>
-            {fmtNum(km)} km
-            {estCost!=null
-              ? <> · {fmtR(estCost)} at {fmtR(rate)}/km{basis==="fleet"
-                  ? <span style={{color:T.warn}}> (fleet average — this vehicle has no cost history of its own yet)</span>
-                  : <span style={{color:T.muted}}> (from its own fuel, parts and repair history)</span>}</>
-              : <> · no vehicle in the fleet has enough cost history yet, so this trip carries no cost</>}
-          </div>
-        )}
-
-        <div className="field" style={{marginTop:8}}><label>Notes (optional)</label>
-          <input value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/></div>
-
-        {err && <div style={{fontSize:12,color:T.danger,marginTop:8}}>{err}</div>}
-        <button className="btn" style={{marginTop:10}} disabled={saving} onClick={save}>
-          {saving?"Saving…":(form.end_km===""?"Start trip":"Save trip")}
-        </button>
-      </div>
-    )}
-
-    {visible.filter(isOpen).length > 0 && (
-      <div className="section" style={{marginBottom:14,borderColor:`${T.warn}55`}}>
-        <div className="section-title" style={{color:T.warn}}>Still out ({visible.filter(isOpen).length})</div>
-        <div style={{fontSize:12,color:T.muted,marginBottom:10}}>
-          Trips started but not closed off. Add the closing odometer when the vehicle is back —
-          until then the trip carries no distance or cost.
-        </div>
-        {visible.filter(isOpen).map(t=>(
-          <div key={t.id} style={{padding:"8px 0",borderTop:`1px solid ${T.border}`}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <div style={{fontSize:13}}>
-                <span style={{fontWeight:600,color:T.cream}}>{vehicleById[t.vehicle_id]?.name||"—"}</span>
-                <span style={{color:T.muted}}> · {t.driver_name} · {purposeById[t.purpose_id]?.name||"—"}</span>
-                <span style={{color:T.muted}}> · out since {t.trip_date} at {fmtNum(t.start_km)} km</span>
+              onChange={e=>setForm(f=>({...f,end_km:e.target.value}))}/>
+            {km>0 && (
+              <div className="help">
+                {fmtNum(km)} km
+                {estCost!=null
+                  ? <> · {fmtR(estCost)} at {fmtR(rate)}/km{basis==="fleet"
+                      ? <span style={{color:T.warn}}> (fleet average — no cost history of its own yet)</span>
+                      : ""}</>
+                  : <> · no cost history yet, so this trip carries no cost</>}
               </div>
-              {closing?.id===t.id ? (
-                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                  <input type="number" inputMode="decimal" autoFocus value={closeKm}
-                    onChange={e=>setCloseKm(e.target.value)} placeholder="closing km"
-                    style={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:6,color:T.cream,
-                            fontFamily:"'Inter',sans-serif",fontSize:13,padding:"6px 10px",width:130}}/>
-                  <button className="btn btn-primary btn-sm" onClick={closeTrip}>Save</button>
-                  <button className="btn btn-ghost btn-sm" onClick={()=>{setClosing(null);setCloseKm("");setCloseErr("");}}>Cancel</button>
-                </div>
-              ) : (
-                <button className="btn btn-sm" onClick={()=>{setClosing(t);setCloseKm("");setCloseErr("");}}>Close trip</button>
-              )}
-            </div>
-            {closing?.id===t.id && closeErr && <div style={{fontSize:12,color:T.danger,marginTop:6}}>{closeErr}</div>}
+            )}
           </div>
-        ))}
-      </div>
+
+          <div className="field full"><label>Notes (optional)</label>
+            <input value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/></div>
+        </div>
+      </Drawer>
     )}
 
-    <div className="tbl-wrap"><table className="tbl">
-      <thead><tr>
-        <th>Date</th><th>Vehicle</th><th>Driver</th><th>Purpose</th>
-        <th className="num">Start</th><th className="num">End</th><th className="num">KM</th>
-        <th className="num">Cost</th><th>Job card</th><th></th>
-      </tr></thead>
-      <tbody>
-        {visible.map(t=>(
-          <tr key={t.id}>
-            <td className="mono" style={{fontSize:11}}>{t.trip_date}</td>
-            <td style={{fontWeight:600}}>{vehicleById[t.vehicle_id]?.name||"—"}</td>
-            <td style={{fontSize:12}}>
-              {t.driver_name}
-              {t.driver_qualified===false && <span className="badge badge-neu" style={{marginLeft:6,color:T.danger}} title="Logged with a licence that did not cover this vehicle on the day">unlicensed</span>}
-            </td>
-            <td style={{fontSize:12,color:T.muted}}>{purposeById[t.purpose_id]?.name||"—"}</td>
-            <td className="num" style={{color:T.muted,fontSize:11}}>{fmtNum(t.start_km)}</td>
-            <td className="num" style={{color:T.muted,fontSize:11}}>{isOpen(t)?"—":fmtNum(t.end_km)}</td>
-            <td className="num" style={{fontWeight:600}}>
-              {isOpen(t) ? <span style={{color:T.warn,fontWeight:400,fontSize:11}}>still out</span> : fmtNum(tripKm(t))}</td>
-            <td className="num" style={{color:tripCost(t)?T.gold:T.border}}>{tripCost(t)?fmtR(tripCost(t)):"—"}</td>
-            <td style={{fontSize:11,color:T.muted}}>{t.job_id?(jobById[t.job_id]?.name||"linked"):"—"}</td>
-            <td>{isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(t)}>x</button>}</td>
-          </tr>
-        ))}
-        {visible.length===0 && <tr><td colSpan={10} className="empty">No trips logged yet.</td></tr>}
-      </tbody>
-    </table></div>
+    {openTrip && (
+      <TripDrawer trip={trips.find(t=>t.id===openTrip.id)||openTrip} vehicle={vehicleById[openTrip.vehicle_id]} purpose={purposeById[openTrip.purpose_id]}
+        job={openTrip.job_id?jobById[openTrip.job_id]:null} isAdmin={isAdmin}
+        tripKm={tripKm} tripCost={tripCost}
+        onClose={()=>setOpenTrip(null)}
+        onCloseTrip={(t)=>{ setOpenTrip(null); setClosing(t); setCloseKm(""); setCloseErr(""); }}
+        onRemove={(t)=>{ setOpenTrip(null); remove(t); }}/>
+    )}
+
+    {showPurposes && isAdmin && (
+      <Drawer title="Trip purposes" meta="Data, not code — add or remove categories here" onClose={()=>setShowPurposes(false)}
+        footer={<><button className="btn btn-ghost" onClick={()=>setShowPurposes(false)}>Close</button></>}>
+        <TripPurposeManager purposes={purposes} setPurposes={setPurposes} companyId={companyId} embedded/>
+      </Drawer>
+    )}
   </>);
+}
+
+// One logged trip, read-only. Trips feed job costs and internal billing, so
+// they are not edited after the fact — an open one can be closed, an admin
+// can delete a wrong one and log it again.
+function TripDrawer({ trip: t, vehicle, purpose, job, isAdmin, tripKm, tripCost, onClose, onCloseTrip, onRemove }) {
+  const open = t.end_km == null;
+  return (
+    <Drawer title={`${vehicle?.name||"—"} · ${t.driver_name}`}
+      meta={<>{purpose?.name||"—"} · {t.trip_date} {open ? <span className="badge badge-warn">still out</span> : <span className="badge badge-neu">{fmtNum(tripKm(t))} km</span>}</>}
+      onClose={onClose}
+      footer={<>
+        {open && <button className="btn btn-primary" onClick={()=>onCloseTrip(t)}>Close trip</button>}
+        {isAdmin && <button className="btn btn-danger" onClick={()=>onRemove(t)}>Delete</button>}
+        <button className="btn btn-ghost" onClick={onClose}>Close</button>
+        <span className="hint">Trips are not edited after logging — delete and log again if it's wrong</span>
+      </>}>
+      <div className="drawer-sect">Readings</div>
+      <div className="drawer-stat"><span>Odometer — start</span><span>{fmtNum(t.start_km)} km</span></div>
+      <div className="drawer-stat"><span>Odometer — end</span><span>{open ? "—" : `${fmtNum(t.end_km)} km`}</span></div>
+      <div className="drawer-stat"><span>Distance</span><b>{open ? "—" : `${fmtNum(tripKm(t))} km`}</b></div>
+      <div className="drawer-sect">Cost</div>
+      <div className="drawer-stat"><span>Rate at the time</span><span>{t.cost_per_km!=null ? `${fmtR(t.cost_per_km)} / km` : "no rate — carries no cost"}</span></div>
+      <div className="drawer-stat"><span>Trip cost</span><b>{tripCost(t) ? fmtR(tripCost(t)) : "—"}</b></div>
+      {job && <div className="drawer-stat"><span>Billed to job card</span><span>{job.name}{job.due_date?` — due ${job.due_date}`:""}</span></div>}
+      <div className="drawer-sect">Driver</div>
+      <div className="drawer-stat"><span>Name</span><span>{t.driver_name}{!t.driver_employee_id && <span style={{color:T.muted}}> · not on the staff list</span>}</span></div>
+      <div className="drawer-stat"><span>Licence check that day</span>
+        <span>{t.driver_qualified===true ? `Qualified${t.driver_licence_class?` — Code ${t.driver_licence_class}`:""}` : t.driver_qualified===false ? <span style={{color:T.danger}}>Not licensed for this vehicle</span> : "not required"}</span></div>
+      {t.notes && (<><div className="drawer-sect">Notes</div><div style={{fontSize:13,lineHeight:1.5}}>{t.notes}</div></>)}
+    </Drawer>
+  );
 }
 
 // Category list is data, not code — Thijs asked for "an option to add
 // categories". is_maintenance is a flag rather than a name match, so a company
 // can rename it or add a second maintenance-type purpose without a code change.
-function TripPurposeManager({ purposes, setPurposes, companyId }) {
+function TripPurposeManager({ purposes, setPurposes, companyId, embedded = false }) {
   const [name, setName] = useState("");
   const [isMaint, setIsMaint] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4647,8 +4721,8 @@ function TripPurposeManager({ purposes, setPurposes, companyId }) {
   }
 
   return (
-    <div className="section" style={{marginBottom:14}}>
-      <div className="section-title">Trip categories</div>
+    <div className={embedded ? "" : "section"} style={embedded ? undefined : {marginBottom:14}}>
+      {!embedded && <div className="section-title">Trip categories</div>}
       <div style={{fontSize:12,color:T.muted,marginBottom:10}}>
         Tick "counts as maintenance" for any category whose trips should be attachable to a job card
         and billed to that job. Removing a category hides it from the dropdown; trips already logged

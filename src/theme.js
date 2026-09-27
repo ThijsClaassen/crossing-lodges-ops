@@ -579,4 +579,14 @@ export const css = `
 
   /* Cards lift off the page instead of being outlined on it. */
   .card,.panel{background:var(--surface-raised);border:1px solid var(--card-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md)}
+
+  /* Lists behind a drawer (readability pass 2026-09-27) */
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .toolbar input,.toolbar select{background:${T.panel};border:1px solid ${T.border};border-radius:6px;color:${T.cream};font-family:'Inter',sans-serif;font-size:13px;padding:7px 10px}
+  .toolbar input{flex:1;min-width:180px;max-width:320px}
+  tr.row-open{cursor:pointer}
+  tr.row-open:hover td{background:var(--accent-wash)}
+  td .sub2{display:block;color:${T.muted};font-size:11px;margin-top:2px;font-weight:400}
+  .chip{display:inline-flex;align-items:center;gap:8px;background:${T.panel};border:1px solid ${T.border};border-radius:999px;padding:6px 8px 6px 12px;font-size:12.5px;flex-wrap:wrap}
+  .badge-warn{background:rgba(154,91,0,.12);color:${T.warn};border:1px solid ${T.warn}}
 `;
