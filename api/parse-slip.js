@@ -29,6 +29,8 @@ export const config = {
 }
 
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'
+// Give up a little before the platform does (maxDuration 60 s here and in vercel.json).
+const DEADLINE_MS = Number(process.env.SLIP_DEADLINE_MS) || 48_000
 
 const EXTRACTION_PROMPT = `You are reading a photo of a supplier purchase slip, delivery note, fuel receipt, or workshop/repair invoice for a hospitality fleet & mechanical department. Extract every line item you can read, plus the supplier/workshop/filling-station name and date if visible.
 
@@ -143,9 +145,16 @@ export default async function handler(req, res) {
     return
   }
 
+  // Own deadline, a little inside the platform's: a clean "ran out of time"
+  // reply the client can act on (it splits the piece in two and retries)
+  // instead of a platform 504 with no body.
+  const t0 = Date.now()
+  const deadline = new AbortController()
+  const timer = setTimeout(() => deadline.abort(), DEADLINE_MS)
   try {
     const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      signal: deadline.signal,
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
@@ -207,9 +216,18 @@ export default async function handler(req, res) {
     if (truncated) parsed.truncated = true
     parsed.parts = images.length > 1 ? images.length : parts
     parsed.part = part
+    parsed.ms = Date.now() - t0
+    console.log(`parse-slip part ${part}/${parts}: ${parsed.ms} ms, ${parsed.line_items.length} lines${truncated ? ', truncated' : ''}`)
 
     res.status(200).json(parsed)
   } catch (err) {
+    if (err?.name === 'AbortError') {
+      console.log(`parse-slip part ${part}/${parts}: ran out of time after ${Date.now() - t0} ms`)
+      res.status(200).json({ line_items: [], timed_out: true, part, parts, ms: Date.now() - t0 })
+      return
+    }
     res.status(500).json({ error: `Unexpected error reading the slip: ${err.message}` })
+  } finally {
+    clearTimeout(timer)
   }
 }
