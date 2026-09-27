@@ -57,6 +57,15 @@ async function resizeImageFile(file, maxDim=1800, quality=0.85) {
   canvas.getContext("2d").drawImage(bitmap,0,0,w,h);
   return new Promise(resolve=>canvas.toBlob(blob=>resolve(blob),"image/jpeg",quality));
 }
+
+// Deep links from the Finance Dashboard (#489, 2026-09-27): ?page=<tab id>
+// opens that tab, ?loc=<lodge id> picks that lodge. Read once at mount; an
+// unknown id falls back to the default so a stale link never breaks the app.
+function urlParam(name) {
+  if (typeof window === 'undefined') return null
+  return new URLSearchParams(window.location.search).get(name)
+}
+
 function blobToBase64(blob) {
   return new Promise((resolve,reject)=>{
     const reader=new FileReader();
@@ -2247,6 +2256,8 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
     license_expiry:"", last_service_date:"", last_service_km:"",
     service_interval_months:"", service_interval_km:"",
     cost_per_km:"", insurance_monthly:"",
+    required_licence_class:"", requires_pdp:false,
+    make_model:"", model_year:"", vin:"", insurer:"", policy_number:"",
     self_serviced:false, service_location_id:"" };
   const [form, setForm] = useState(BLANK_V);
 
@@ -2305,7 +2316,7 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
         <div key={group.label} style={{marginBottom:28}}>
           <div className="section-title">{group.label}</div>
           <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>Name</th><th>ID / Reg</th><th>Fuel</th><th>Licence Disk</th><th>Service Due</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>ID / Reg</th><th>Fuel</th><th>Driver needs</th><th>Licence Disk</th><th>Service Due</th><th></th></tr></thead>
             <tbody>
               {group.items.map(v => {
                 const st = vehicleStatus(v, odo[v.id]);
@@ -2323,6 +2334,12 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
                   </td>
                   <td className="mono" style={{fontSize:11,color:T.muted}}>{v.id}</td>
                   <td><span className={`badge badge-${v.fuel==="diesel"?"d":"p"}`}>{v.fuel}</span></td>
+                  <td style={{fontSize:12}}>
+                    {v.category==="equipment" ? <span style={{color:T.border,fontSize:11}}>—</span>
+                      : v.required_licence_class
+                        ? <span>Code {v.required_licence_class}{v.requires_pdp?" + PDP":""}</span>
+                        : <span style={{color:T.muted,fontSize:11}} title="Set the licence code on the vehicle so the trip log can check drivers">not set</span>}
+                  </td>
                   <td>
                     {st.license
                       ? <span style={{fontFamily:"'Inter',sans-serif",fontSize:12,color:col(st.license.state)}}>
@@ -2343,7 +2360,7 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
                   </td>
                 </tr>
               );})}
-              {group.items.length===0&&<tr><td colSpan={6} className="empty">No {group.label.toLowerCase()} yet</td></tr>}
+              {group.items.length===0&&<tr><td colSpan={7} className="empty">No {group.label.toLowerCase()} yet</td></tr>}
             </tbody>
           </table></div>
         </div>
@@ -2379,6 +2396,30 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
               </div>
             </div>
 
+            {form.category!=="equipment" && (
+              <>
+                <div className="section-title" style={{marginTop:6}}>Who may drive it</div>
+                <div className="grid2">
+                  <div className="field"><label>Licence code needed</label>
+                    <select value={form.required_licence_class||""} onChange={e=>setForm(f=>({...f,required_licence_class:e.target.value}))}>
+                      <option value="">— not set —</option>
+                      {LICENCE_CLASSES.map(c=><option key={c} value={c}>Code {c}</option>)}
+                    </select>
+                  </div>
+                  <div className="field"><label>Needs a PDP?</label>
+                    <select value={form.requires_pdp?"yes":"no"} onChange={e=>setForm(f=>({...f,requires_pdp:e.target.value==="yes"}))}>
+                      <option value="no">No</option>
+                      <option value="yes">Yes — carries passengers for reward</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{fontSize:11,color:T.muted,marginTop:-4,marginBottom:8,lineHeight:1.5}}>
+                  The trip log checks the driver's licence in HR against this. Anyone without the code, or with an
+                  expired one, is shown greyed with the reason rather than hidden. Leave blank to skip the check.
+                </div>
+              </>
+            )}
+
             <div className="section-title" style={{marginTop:6}}>Licence Disk</div>
             <div className="field"><label>Expiry Date</label>
               <DateField value={form.license_expiry} onChange={v=>setForm(f=>({...f,license_expiry:v}))}/>
@@ -2409,6 +2450,27 @@ function FleetManager({ fleet, setFleet, sbFleet, locData, serviceJobs, companyI
                   onChange={e=>setForm(f=>({...f,service_interval_km:e.target.value}))}/>
               </div>
             </div>
+
+            {form.category!=="equipment" && (
+              <>
+                <div className="section-title" style={{marginTop:12}}>Identity &amp; insurance</div>
+                <div style={{fontSize:11,color:T.muted,marginBottom:8,lineHeight:1.5}}>
+                  What the insurer asks for when a vehicle is written off. The Finance Dashboard's claim pack reads these.
+                </div>
+                <div className="grid2">
+                  <div className="field"><label>Make / model</label>
+                    <input type="text" placeholder="e.g. Toyota Land Cruiser 79 4.2D" value={form.make_model} onChange={e=>setForm(f=>({...f,make_model:e.target.value}))}/></div>
+                  <div className="field"><label>Year</label>
+                    <input type="number" inputMode="numeric" min="1950" max="2100" value={form.model_year} onChange={e=>setForm(f=>({...f,model_year:e.target.value}))}/></div>
+                  <div className="field"><label>VIN</label>
+                    <input type="text" value={form.vin} onChange={e=>setForm(f=>({...f,vin:e.target.value}))}/></div>
+                  <div className="field"><label>Insurer</label>
+                    <input type="text" placeholder="e.g. Santam" value={form.insurer} onChange={e=>setForm(f=>({...f,insurer:e.target.value}))}/></div>
+                  <div className="field"><label>Policy number</label>
+                    <input type="text" value={form.policy_number} onChange={e=>setForm(f=>({...f,policy_number:e.target.value}))}/></div>
+                </div>
+              </>
+            )}
 
             <div className="field" style={{marginBottom:6}}>
               <label>Insurance Premium (R per month)</label>
@@ -3060,6 +3122,15 @@ const fleetRow = v => ({
   service_location_id:     v.self_serviced ? (v.service_location_id || null) : null,
   cost_per_km:             v.cost_per_km === "" || v.cost_per_km == null ? null : Number(v.cost_per_km),
   insurance_monthly:       v.insurance_monthly === "" || v.insurance_monthly == null ? null : Number(v.insurance_monthly),
+  // Who may drive it (#485). Blank = no requirement (equipment, or not set).
+  required_licence_class:  v.required_licence_class || null,
+  requires_pdp:            !!v.requires_pdp,
+  // What an insurer asks for (#483). Read by the Finance Dashboard's claim pack.
+  make_model:              v.make_model || null,
+  model_year:              v.model_year === "" || v.model_year == null ? null : Number(v.model_year),
+  vin:                     v.vin || null,
+  insurer:                 v.insurer || null,
+  policy_number:           v.policy_number || null,
 });
 
 const sbFleet = {
@@ -3219,8 +3290,8 @@ function AuthenticatedApp() {
     vehicleRegisterEnabled,
   } = useCompany();
 
-  const [page,    setPage]    = useState("dashboard");
-  const [locId,   setLocId]   = useState("ZC");
+  const [page,    setPage]    = useState(() => urlParam('page') || "dashboard");
+  const [locId,   setLocId]   = useState(() => urlParam("loc") || "ZC");
   // 'ZC' is only a first guess: this state initialises before the lodge list
   // has loaded (CompanyContext fetches it), and another company won't have a
   // lodge called ZC at all. Once LOCATIONS is populated — and again whenever
@@ -3323,6 +3394,13 @@ function AuthenticatedApp() {
         service_location_id:     r.service_location_id || "",
         cost_per_km:             r.cost_per_km == null ? null : +r.cost_per_km,
         insurance_monthly:       r.insurance_monthly == null ? null : +r.insurance_monthly,
+        required_licence_class:  r.required_licence_class || "",
+        requires_pdp:            !!r.requires_pdp,
+        make_model:              r.make_model || "",
+        model_year:              r.model_year == null ? "" : r.model_year,
+        vin:                     r.vin || "",
+        insurer:                 r.insurer || "",
+        policy_number:           r.policy_number || "",
       })));
 
       // Vehicle Register (2026-08-27)
@@ -3402,6 +3480,12 @@ function AuthenticatedApp() {
   const featureFlags = { vehicleRegister: vehicleRegisterEnabled };
   const visiblePages = PAGES.filter(p => (isAdmin || !p.adminOnly) && (!p.flag || featureFlags[p.flag]));
   const sections  = [...new Set(visiblePages.map(p=>p.section))];
+  // A deep link (?page=) to a page this user cannot see, or a typo, lands on
+  // the first visible page instead of a blank screen (#489).
+  useEffect(()=>{
+    if(visiblePages.length && !visiblePages.some(p=>p.id===page)) setPage(visiblePages[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, isAdmin, featureFlags]);
   const current   = PAGES.find(p=>p.id===page);
   const locColor  = LOC_COLORS[locId];
   const locName   = LOCATIONS.find(l=>l.id===locId)?.name;
@@ -3857,6 +3941,12 @@ function PickOrAdd({ value, options, onChange, placeholder = "New value" }) {
   );
 }
 
+// SA licence codes, lowest to highest (mirrors LICENCE_CLASSES in the HR app
+// and licence_class_rank() in add_hr_qualifications.sql).
+const LICENCE_CLASSES = ["A1","A","B","EB","C1","C","EC1","EC"];
+
+// Options may carry { disabled, hint }: rendered greyed with the hint after
+// the label and not selectable (#485 — greyed-with-reason, never hidden).
 function SearchableSelect({ value, onChange, options, placeholder = "Select…", style, inputStyle, disabled }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -3879,6 +3969,7 @@ function SearchableSelect({ value, onChange, options, placeholder = "Select…",
   }, []);
 
   function choose(opt) {
+    if (opt.disabled) return;
     onChange(opt.value);
     setQuery("");
     setOpen(false);
@@ -3936,11 +4027,14 @@ function SearchableSelect({ value, onChange, options, placeholder = "Select…",
               onMouseDown={(e) => { e.preventDefault(); choose(o); }}
               onMouseEnter={() => setHighlight(i)}
               style={{
-                padding: "7px 10px", fontSize: 13, cursor: "pointer", color: T.cream,
-                background: i === highlight ? "rgba(184,147,90,.14)" : "transparent",
+                padding: "7px 10px", fontSize: 13, cursor: o.disabled ? "not-allowed" : "pointer",
+                color: o.disabled ? T.muted : T.cream, opacity: o.disabled ? 0.65 : 1,
+                background: i === highlight && !o.disabled ? "rgba(184,147,90,.14)" : "transparent",
               }}
+              title={o.hint || undefined}
             >
               {o.label}
+              {o.hint && <span style={{ fontSize: 11, color: o.disabled ? T.danger : T.muted }}> — {o.hint}</span>}
             </div>
           ))}
         </div>
@@ -4005,6 +4099,29 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
 
   const vehicleById = useMemo(()=>Object.fromEntries(fleet.map(v=>[v.id,v])),[fleet]);
   const purposeById = useMemo(()=>Object.fromEntries(purposes.map(p=>[p.id,p])),[purposes]);
+
+  // Who may drive the picked vehicle (#485). Asked of the database
+  // (drivers_for_vehicle in add_hr_qualifications.sql) for the vehicle's
+  // required code + PDP, on the TRIP DATE — so a back-dated trip is judged
+  // against the licence as it stood that day. Keyed by employee id:
+  // { qualifies, reason, licence_class }. Empty while nothing is required.
+  const [eligibility, setEligibility] = useState({});
+  const pickedVehicle = vehicleById[form.vehicle_id];
+  const requirement = pickedVehicle?.required_licence_class || null;
+  const needsPdp = !!pickedVehicle?.requires_pdp;
+  useEffect(()=>{
+    let cancelled = false;
+    if(!requirement && !needsPdp){ setEligibility({}); return; }
+    supabase.rpc("drivers_for_vehicle", { p_company_id: companyId, p_required_class: requirement, p_needs_pdp: needsPdp, p_on: form.trip_date || todayISO() })
+      .then(({ data, error })=>{
+        if(cancelled) return;
+        if(error || !Array.isArray(data)){ setEligibility({}); return; }
+        setEligibility(Object.fromEntries(data.map(d=>[d.employee_id, { qualifies: d.qualifies, reason: d.reason, licence_class: d.licence_class }])));
+      })
+      .catch(()=>{ if(!cancelled) setEligibility({}); });
+    return ()=>{ cancelled = true; };
+  }, [companyId, requirement, needsPdp, form.trip_date]);
+  const driverCheck = form.driver_employee_id ? eligibility[form.driver_employee_id] : null;
   const jobById     = useMemo(()=>Object.fromEntries((jobs||[]).map(j=>[j.id,j])),[jobs]);
 
   // Last odometer reading we've seen for each vehicle — used to prefill the
@@ -4048,6 +4165,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
       ? staffName(hrEmployees.find(e=>e.id===form.driver_employee_id))
       : form.driver_name.trim();
     if(!driver) return setErr("Say who was driving.");
+    if(driverCheck && !driverCheck.qualifies) return setErr(`${driver}: ${driverCheck.reason}. Pick a qualified driver, or fix the licence in HR first.`);
     const s = parseFloat(form.start_km);
     if(!(s>=0)) return setErr("The opening odometer reading is needed.");
     // End reading is optional on purpose: crew log the trip as they leave and
@@ -4067,6 +4185,10 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
         trip_date: form.trip_date,
         driver_name: driver,
         driver_employee_id: form.driver_employee_id || null,
+        // Snapshot of the licence check as it stood today (#485). Stays as
+        // logged: a licence expiring next year does not rewrite this trip.
+        driver_qualified: driverCheck ? !!driverCheck.qualifies : null,
+        driver_licence_class: driverCheck?.licence_class || null,
         start_km: s, end_km: e,   // null while the vehicle is still out
         job_id: isMaintenanceTrip ? (form.job_id || null) : null,
         // Snapshot the derived rate as it stands today. It's frozen here on
@@ -4172,8 +4294,22 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
               onChange={v=>setForm(f=>({...f,driver_employee_id:v}))}
               options={[{ value:"", label:"— someone not on the staff list —" },
                 ...[...hrEmployees].sort((a,b)=>staffName(a).localeCompare(staffName(b)))
-                  .map(e=>({ value:e.id, label:staffName(e) }))]}
+                  .map(e=>{
+                    const el = eligibility[e.id];
+                    if(!el) return { value:e.id, label:staffName(e) };
+                    return el.qualifies
+                      ? { value:e.id, label:staffName(e), hint:`Code ${el.licence_class||"?"}` }
+                      : { value:e.id, label:staffName(e), hint:el.reason, disabled:true };
+                  })]}
               placeholder="Search staff…"/>
+            {(requirement||needsPdp) && (
+              <div style={{fontSize:11,color:T.muted,marginTop:4}}>
+                {pickedVehicle.name} needs {requirement?`Code ${requirement}`:"a licence"}{needsPdp?" + PDP":""}. Staff without it are greyed with the reason.
+              </div>
+            )}
+            {driverCheck && !driverCheck.qualifies && (
+              <div style={{fontSize:11,color:T.danger,marginTop:4}}>{driverCheck.reason} — this driver cannot be logged for this vehicle.</div>
+            )}
           </div>
           {!form.driver_employee_id && (
             <div className="field"><label>Driver name</label>
@@ -4278,7 +4414,10 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
           <tr key={t.id}>
             <td className="mono" style={{fontSize:11}}>{t.trip_date}</td>
             <td style={{fontWeight:600}}>{vehicleById[t.vehicle_id]?.name||"—"}</td>
-            <td style={{fontSize:12}}>{t.driver_name}</td>
+            <td style={{fontSize:12}}>
+              {t.driver_name}
+              {t.driver_qualified===false && <span className="badge badge-neu" style={{marginLeft:6,color:T.danger}} title="Logged with a licence that did not cover this vehicle on the day">unlicensed</span>}
+            </td>
             <td style={{fontSize:12,color:T.muted}}>{purposeById[t.purpose_id]?.name||"—"}</td>
             <td className="num" style={{color:T.muted,fontSize:11}}>{fmtNum(t.start_km)}</td>
             <td className="num" style={{color:T.muted,fontSize:11}}>{isOpen(t)?"—":fmtNum(t.end_km)}</td>
