@@ -16,6 +16,7 @@ import { parse } from '@babel/parser'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const APP = readFileSync(join(here, '..', 'src', 'App.jsx'), 'utf8')
+
 const THEME = readFileSync(join(here, '..', 'src', 'theme.js'), 'utf8')
 let failed = 0
 function check(name, ok, detail = '') { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : ` — ${detail}`}`); if (!ok) failed++ }
@@ -56,6 +57,16 @@ for (const t of ['Log bulk diesel delivery', 'Log diesel issue', 'Log tank dip',
   check(`${t} is a one-screen drawer`, i > 0 && !/tabs=\{/.test(block))
 }
 check('no fuel form is left as an overlay modal', !/Log Bulk <span>Diesel Delivery|Log Diesel <span>Issue|Log Tank <span>Dip|Log <span>Petrol Purchase|Log <span>Petrol Issue/.test(APP))
+
+// The drawer grows to fit its content instead of scrolling sideways (2026-09-28).
+{
+  const drawerSrc = APP
+  const fit = drawerSrc.slice(drawerSrc.indexOf('function Drawer('), drawerSrc.indexOf('function Drawer(') + 4000)
+  const okFit = /const overflow = el\.scrollWidth - el\.clientWidth/.test(fit) && /setFitWidth\(/.test(fit) && /window\.innerWidth - 250/.test(fit) && /new ResizeObserver\(measure\)/.test(fit) && /style=\{fitWidth \? \{ width: fitWidth \} : undefined\}/.test(fit) && /className="drawer-body" ref=\{bodyRef\}/.test(fit)
+  const okMobile = /window\.innerWidth <= 768\) return/.test(fit)
+  check('drawer widens itself when its content would scroll sideways (capped at screen minus sidebar)', okFit)
+  check('drawer never grows past a phone or tablet screen', okMobile)
+}
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nall trip log checks pass')
 process.exit(failed ? 1 : 0)
