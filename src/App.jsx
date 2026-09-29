@@ -14,6 +14,7 @@ import { transferEffect, transferEffectAsOf, incomingTransfers, outstandingSent,
 import { COST_KINDS, KIND_LABEL, PERIODS, runningCostsFor } from "./runningCosts.js";
 import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
 import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPurchase.js";
+import { isoDate, todayIso } from './dates.js'
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const fmtR = n => `R ${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -23,7 +24,7 @@ const fmtNum = n => Number(n || 0).toLocaleString("en-ZA", { maximumFractionDigi
 // as text via DateField. vehicle_trips.trip_date is a real Postgres `date`
 // column, and a native <input type="date"> only accepts ISO — so it needs its
 // own helper rather than reusing today().
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const todayISO = () => todayIso();
 const uid   = () => crypto.randomUUID();
 const round2 = n => Math.round((Number(n)||0)*100)/100;
 
@@ -284,6 +285,12 @@ function FuelTransfers({ domain, locId, companyId, transfers, litresOnHand, onCh
   const [busy, setBusy] = useState(false);
   const [msg, setMsg]   = useState("");
   const [gotQty, setGotQty] = useState({});
+  // Readability round (2026-09-29, Thijs: the transfer "lives as an ugly
+  // block in the screen … rather make it a button with a drawer, as we
+  // rarely use it"). A ghost button sits next to "+ Log Delivery"/"+ Log
+  // Purchase"; open transfers show as chips beside it so an arrival waiting
+  // to be confirmed is still seen without the block.
+  const [open, setOpen] = useState(false);
 
   const others   = LOCATIONS.filter(l => l.id !== locId);
   const lodge    = id => LOCATIONS.find(l => l.id === id)?.name || id;
@@ -338,100 +345,117 @@ function FuelTransfers({ domain, locId, companyId, transfers, litresOnHand, onCh
     } catch(e){ setMsg("Could not cancel: "+e.message); } finally { setBusy(false); }
   }
 
+  const fuel = domain === "diesel" ? "diesel" : "petrol";
   return (
-    <div className="card" style={{marginTop:26, borderTop:`2px solid ${T.border||"#3A3850"}`, paddingTop:16}}>
-      {/* Heavier top margin and a rule above it: without these it butted
-          straight onto the deliveries card and read as one continuous form. */}
-      <div style={{fontSize:11,letterSpacing:.8,textTransform:"uppercase",color:T.muted,marginBottom:6}}>
-        Between lodges
-      </div>
-      <div className="card-title">Transfer fuel to another lodge</div>
-      <div style={{fontSize:12,color:T.muted,marginBottom:10}}>
-        Use this instead of issuing to a vehicle. A transfer never counts as usage and never
-        shows up as dip variance — so moving fuel legitimately can't look like a loss.
-      </div>
-      <div className="grid3">
-        <div className="field"><label>To lodge</label>
-          <select value={form.to} onChange={e=>setForm(f=>({...f,to:e.target.value}))}>
-            <option value="">Select lodge…</option>
-            {others.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-        </div>
-        <div className="field"><label>Litres</label>
-          <input type="number" inputMode="decimal" value={form.litres}
-            onChange={e=>setForm(f=>({...f,litres:e.target.value}))}/>
-          <div style={{fontSize:11,color:over?T.danger:T.muted,marginTop:3}}>
-            {over ? `Only ${fmtL(litresOnHand)} expected in this tank` : `${fmtL(litresOnHand)} expected in this tank`}
-          </div>
-        </div>
-        <div className="field"><label>Date sent</label>
-          <DateField value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/>
-        </div>
-      </div>
-      <div className="field"><label>Notes</label>
-        <input type="text" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}
-          placeholder="e.g. drums on the Hilux"/>
-      </div>
-      <button className="btn btn-primary" onClick={send} disabled={busy}>{busy?"Saving…":"Send fuel"}</button>
-      {msg && <div style={{fontSize:12,marginTop:8}}>{msg}</div>}
-
+    <>
       {incoming.length>0 && (
-        <>
-          <div className="card-title" style={{marginTop:16}}>Incoming — confirm what arrived ({incoming.length})</div>
-          <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>Sent</th><th>From</th><th className="num">Sent L</th><th className="num">Received L</th><th></th></tr></thead>
-            <tbody>
-              {incoming.map(t=>{
-                const d = daysInTransit(t);
-                return (
-                  <tr key={t.id}>
-                    <td className="mono" style={{fontSize:12}}>{t.sent_date}
-                      {d>3 && <div style={{fontSize:10,color:T.danger}}>{d} days ago</div>}</td>
-                    <td>{lodge(t.from_location_id)}</td>
-                    <td className="num">{fmtL(t.qty)}</td>
-                    <td className="num">
-                      <input type="number" inputMode="decimal" placeholder={String(t.qty)}
-                        value={gotQty[t.id] ?? ""} style={{width:90}}
-                        onChange={e=>setGotQty(m=>({...m,[t.id]:e.target.value}))}/>
-                    </td>
-                    <td>
-                      <button className="btn btn-primary btn-sm" onClick={()=>confirm(t)} disabled={busy}>Confirm</button>{" "}
-                      <button className="btn btn-ghost btn-sm" onClick={()=>cancel(t)} disabled={busy}>Never sent</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table></div>
-        </>
+        <button className="btn btn-sm" onClick={()=>setOpen(true)}
+          style={{border:`1px solid ${T.danger}`,color:T.danger,background:"transparent"}}
+          title="Fuel another lodge sent here — confirm what arrived">
+          {incoming.length} arriving — confirm
+        </button>
       )}
-
       {awaiting.length>0 && (
-        <>
-          <div className="card-title" style={{marginTop:16}}>Sent, not yet confirmed ({awaiting.length})</div>
-          <div style={{fontSize:12,color:T.muted,marginBottom:6}}>
-            Already out of this tank. Anything here for more than a few days left and nobody
-            has said it arrived.
-          </div>
-          <div className="tbl-wrap"><table className="tbl">
-            <thead><tr><th>Sent</th><th>To</th><th className="num">Litres</th><th className="num">Waiting</th></tr></thead>
-            <tbody>
-              {awaiting.map(t=>{
-                const d = daysInTransit(t);
-                return (
-                  <tr key={t.id}>
-                    <td className="mono" style={{fontSize:12}}>{t.sent_date}</td>
-                    <td>{lodge(t.to_location_id)}</td>
-                    <td className="num">{fmtL(t.qty)}</td>
-                    <td className="num" style={{color:d>3?T.danger:T.muted}}>{d} day{d===1?"":"s"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table></div>
-        </>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setOpen(true)} title="Sent from this tank, not yet confirmed by the other lodge">
+          {awaiting.length} sent, awaiting
+        </button>
       )}
-    </div>
+      <button className="btn btn-ghost" onClick={()=>{setMsg("");setOpen(true);}}>Transfer {fuel}</button>
+
+      {open && (
+        <Drawer title={`Transfer ${fuel} to another lodge`} meta={`${fmtL(litresOnHand)} expected in this tank`}
+          onClose={()=>setOpen(false)}
+          footer={<>
+            <button className="btn btn-primary" onClick={send} disabled={busy||!form.to||litres<=0}>{busy?"Saving…":"Send fuel"}</button>
+            <button className="btn btn-ghost" onClick={()=>setOpen(false)}>Close</button>
+          </>}>
+          <div className="drawer-note">
+            Use this instead of issuing to a vehicle. A transfer never counts as usage and never
+            shows up as dip variance — so moving fuel legitimately can't look like a loss. It only
+            counts in the other lodge's tank once they confirm it arrived.
+          </div>
+          {msg && <div className="drawer-note" style={{marginTop:10}}>{msg}</div>}
+
+          <div className="drawer-sect">Send</div>
+          <div className="grid3">
+            <div className="field"><label>To lodge</label>
+              <select value={form.to} onChange={e=>setForm(f=>({...f,to:e.target.value}))}>
+                <option value="">Select lodge…</option>
+                {others.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Litres</label>
+              <input type="number" inputMode="decimal" value={form.litres}
+                onChange={e=>setForm(f=>({...f,litres:e.target.value}))}/>
+              {over && <div className="help" style={{color:T.danger}}>Only {fmtL(litresOnHand)} expected in this tank</div>}
+            </div>
+            <div className="field"><label>Date sent</label>
+              <DateField value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/>
+            </div>
+          </div>
+          <div className="field"><label>Notes</label>
+            <input type="text" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}
+              placeholder="e.g. drums on the Hilux"/>
+          </div>
+
+          {incoming.length>0 && (
+            <>
+              <div className="drawer-sect">Arriving — confirm what arrived ({incoming.length})</div>
+              <div className="tbl-wrap"><table className="tbl">
+                <thead><tr><th>Sent</th><th>From</th><th className="num">Sent L</th><th className="num">Received L</th><th></th></tr></thead>
+                <tbody>
+                  {incoming.map(t=>{
+                    const d = daysInTransit(t);
+                    return (
+                      <tr key={t.id}>
+                        <td className="mono" style={{fontSize:12}}>{t.sent_date}
+                          {d>3 && <div style={{fontSize:10,color:T.danger}}>{d} days ago</div>}</td>
+                        <td>{lodge(t.from_location_id)}</td>
+                        <td className="num">{fmtL(t.qty)}</td>
+                        <td className="num">
+                          <input type="number" inputMode="decimal" placeholder={String(t.qty)}
+                            value={gotQty[t.id] ?? ""} style={{width:90}}
+                            onChange={e=>setGotQty(m=>({...m,[t.id]:e.target.value}))}/>
+                        </td>
+                        <td>
+                          <button className="btn btn-primary btn-sm" onClick={()=>confirm(t)} disabled={busy}>Confirm</button>{" "}
+                          <button className="btn btn-ghost btn-sm" onClick={()=>cancel(t)} disabled={busy}>Never sent</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table></div>
+            </>
+          )}
+
+          {awaiting.length>0 && (
+            <>
+              <div className="drawer-sect">Sent, not yet confirmed ({awaiting.length})</div>
+              <div className="help" style={{marginBottom:6}}>
+                Already out of this tank. Anything here for more than a few days left and nobody has said it arrived.
+              </div>
+              <div className="tbl-wrap"><table className="tbl">
+                <thead><tr><th>Sent</th><th>To</th><th className="num">Litres</th><th className="num">Waiting</th></tr></thead>
+                <tbody>
+                  {awaiting.map(t=>{
+                    const d = daysInTransit(t);
+                    return (
+                      <tr key={t.id}>
+                        <td className="mono" style={{fontSize:12}}>{t.sent_date}</td>
+                        <td>{lodge(t.to_location_id)}</td>
+                        <td className="num">{fmtL(t.qty)}</td>
+                        <td className="num" style={{color:d>3?T.danger:T.muted}}>{d} day{d===1?"":"s"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table></div>
+            </>
+          )}
+        </Drawer>
+      )}
+    </>
   );
 }
 
@@ -585,7 +609,11 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
       {/* DELIVERIES */}
       {tab==="deliveries"&&isAdmin&&(
         <>
-          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14}}>
+            {/* Fuel transfers live behind a button (2026-09-29) — a transfer is a
+                way fuel arrives or leaves, so it sits with deliveries. */}
+            <FuelTransfers domain="diesel" locId={locId} companyId={companyId}
+              transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
             <button className="btn btn-primary" onClick={()=>setShowDelivery(true)}>+ Log Delivery</button>
           </div>
           <div className="tbl-wrap"><table className="tbl">
@@ -777,14 +805,6 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
         </Drawer>
       )}
 
-      {/* Gated to the purchases/deliveries tab only. It first rendered under
-          every tab, which made it read as an extension of whichever screen
-          you happened to be on rather than its own thing. A transfer is a
-          way fuel ARRIVES or LEAVES, so it belongs with deliveries. */}
-      {tab==="deliveries" && (
-        <FuelTransfers domain="diesel" locId={locId} companyId={companyId}
-          transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
-      )}
     </>
   );
 }
@@ -896,7 +916,11 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
 
       {tabState==="purchases"&&(
         <>
-          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14}}>
+            {/* Fuel transfers live behind a button (2026-09-29) — a transfer is a
+                way fuel arrives or leaves, so it sits with purchases. */}
+            <FuelTransfers domain="petrol" locId={locId} companyId={companyId}
+              transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
             <button className="btn btn-primary" onClick={()=>{setPForm({...blankPForm,date:today()});setShowPurchase(true);}}>+ Log Purchase</button>
           </div>
           <div className="tbl-wrap"><table className="tbl">
@@ -1063,14 +1087,6 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
         </Drawer>
       )}
 
-      {/* Gated to the purchases/deliveries tab only. It first rendered under
-          every tab, which made it read as an extension of whichever screen
-          you happened to be on rather than its own thing. A transfer is a
-          way fuel ARRIVES or LEAVES, so it belongs with deliveries. */}
-      {tabState==="purchases" && (
-        <FuelTransfers domain="petrol" locId={locId} companyId={companyId}
-          transfers={transfers} litresOnHand={theoretical} onChanged={onTransfersChanged}/>
-      )}
     </>
   );
 }
@@ -3387,7 +3403,7 @@ export default function App() {
 // since a member purchase is pass-through spend, not fleet/stock data.
 function MemberPurchaseModal({ companyId, locId, onClose }) {
   const [members,setMembers]=useState([]);
-  const [form,setForm]=useState({member_id:"",date:new Date().toISOString().slice(0,10),description:"",amount:""});
+  const [form,setForm]=useState({member_id:"",date:todayIso(),description:"",amount:""});
   const [saving,setSaving]=useState(false);
   const [message,setMessage]=useState("");
 
@@ -4417,7 +4433,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
     } catch(ex){ alert("Error: "+ex.message); }
   }
 
-  const monthKm = visible.filter(t=>(t.trip_date||"").slice(0,7)===new Date().toISOString().slice(0,7));
+  const monthKm = visible.filter(t=>(t.trip_date||"").slice(0,7)===todayIso().slice(0, 7));
   const totalKm = monthKm.reduce((s,t)=>s+tripKm(t),0);
   const totalCost = monthKm.reduce((s,t)=>s+tripCost(t),0);
   const maintKm = monthKm.filter(t=>t.job_id).reduce((s,t)=>s+tripKm(t),0);
@@ -4435,8 +4451,8 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
   const [purpFilter, setPurpFilter] = useState("");
   const [monthFilter, setMonthFilter] = useState("this");
   const [openTrip, setOpenTrip] = useState(null);
-  const thisMonth = new Date().toISOString().slice(0,7);
-  const lastMonth = (()=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); return d.toISOString().slice(0,7); })();
+  const thisMonth = todayIso().slice(0, 7);
+  const lastMonth = (()=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); return isoDate(d).slice(0, 7); })();
   const q = search.trim().toLowerCase();
   const rows = visible
     .filter(t=>!vehFilter || t.vehicle_id===vehFilter)
