@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
+import { useBackToHome } from './backButton.js'
 import { openTripFor, takeoverProblem, takeoverPatch } from './tripTakeover.js'
 import { applyServiceDone, hasServiceSchedule, nextServiceAfter, nextServiceText } from './serviceRoll.js'
 import { prepareSlipImages, readSlipParts } from "./slipTiles.js";
@@ -3709,6 +3710,8 @@ function AuthenticatedApp() {
   // while it's being trialled). A page with no flag behaves exactly as before.
   const featureFlags = { vehicleRegister: vehicleRegisterEnabled };
   const visiblePages = PAGES.filter(p => (isAdmin || !p.adminOnly) && (!p.flag || featureFlags[p.flag]));
+  // Android back button → the first page (#555).
+  useBackToHome({ page, setPage, home: visiblePages[0]?.id });
   const sections  = [...new Set(visiblePages.map(p=>p.section))];
   // A deep link (?page=) to a page this user cannot see, or a typo, lands on
   // the first visible page instead of a blank screen (#489).
