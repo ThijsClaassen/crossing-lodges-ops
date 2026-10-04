@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
+import { openTripFor, takeoverProblem, takeoverPatch } from './tripTakeover.js'
+import { applyServiceDone, hasServiceSchedule, nextServiceAfter, nextServiceText } from './serviceRoll.js'
 import { prepareSlipImages, readSlipParts } from "./slipTiles.js";
 import { sb, LOCATIONS, LOC_COLORS } from "./sb.js";
 import { subscribe as subscribeOffline, listRejected, retryRejected, discardEntry, syncNow } from "./offline.js";
@@ -1581,8 +1583,8 @@ function PartsStock({ loc, locId, setLoc, isAdmin, fleet, companyId, slips, onSl
 }
 
 // ─── REPAIRS ─────────────────────────────────────────────────────────────────
-const BLANK_REPAIR = () => ({date:today(),vehicle:"",workshop:"",invoiceNo:"",description:"",labourCost:"",partsCost:"",otherCost:"",invoiceReceived:false,notes:"",slipId:null});
-function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipAttached }) {
+const BLANK_REPAIR = () => ({date:today(),vehicle:"",workshop:"",invoiceNo:"",description:"",labourCost:"",partsCost:"",otherCost:"",invoiceReceived:false,notes:"",slipId:null,serviceDone:false,serviceKm:""});
+function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipAttached, odometers = {}, onServiceDone }) {
   const repairs=loc.repairs;
   const upd=patch=>setLoc(l=>({...l,...patch}));
   const [showForm,setShowForm]=useState(false);
@@ -1591,10 +1593,20 @@ function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipA
   const totalOf=r=>(parseFloat(r.labourCost)||0)+(parseFloat(r.partsCost)||0)+(parseFloat(r.otherCost)||0);
   const formTotal=totalOf(form);
 
-  const addRepair=()=>{
-    upd({repairs:[{...form,id:uid(),totalCost:totalOf(form)},...repairs]});
+  const addRepair=async()=>{
+    // The repair row itself never carries the tick — serviceDone/serviceKm
+    // only drive the vehicle update below (#548).
+    const {serviceDone, serviceKm, ...row} = form;
+    upd({repairs:[{...row,id:uid(),totalCost:totalOf(form)},...repairs]});
+    if (serviceDone && form.vehicle && onServiceDone) {
+      try { await onServiceDone(form.vehicle, { date: form.date, km: serviceKm }); }
+      catch (e) { alert("The repair is saved, but the vehicle's service date could not be updated: " + e.message + "\nSet it under Fleet."); }
+    }
     setForm(BLANK_REPAIR());setShowForm(false);
   };
+  // "Service done" (#548): the vehicle on the form, and its odometer now.
+  const formVehicle = fleet.find(v=>v.id===form.vehicle);
+  const pickVehicle = (id) => setForm(f=>({...f, vehicle:id, serviceKm: odometers[id] ? String(odometers[id]) : ""}));
 
   const totalSpend=repairs.reduce((s,r)=>s+(r.totalCost||0),0);
   const byVehicle=useMemo(()=>{
@@ -1702,7 +1714,7 @@ function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipA
             <div className="grid2">
               <div className="field"><label>Date</label><DateField value={form.date} onChange={v=>setForm(f=>({...f,date:v}))}/></div>
               <div className="field"><label>Vehicle / Equipment</label>
-                <select value={form.vehicle} onChange={e=>setForm(f=>({...f,vehicle:e.target.value}))}>
+                <select value={form.vehicle} onChange={e=>pickVehicle(e.target.value)}>
                   <option value="">— Select —</option>
                   {fleet.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
@@ -1727,6 +1739,29 @@ function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipA
               <input type="checkbox" id="inv-recv" checked={form.invoiceReceived} onChange={e=>setForm(f=>({...f,invoiceReceived:e.target.checked}))} style={{accentColor:T.gold,width:15,height:15}}/>
               <label htmlFor="inv-recv" style={{fontSize:13,color:T.muted,cursor:"pointer"}}>Invoice received</label>
             </div>
+            {formVehicle && (
+              <div className="info-box" style={{display:"block",marginBottom:16}}>
+                <div style={{display:"flex",alignItems:"center",gap:9}}>
+                  <input type="checkbox" id="svc-done" checked={form.serviceDone} onChange={e=>setForm(f=>({...f,serviceDone:e.target.checked}))} style={{accentColor:T.gold,width:15,height:15}}/>
+                  <label htmlFor="svc-done" style={{fontSize:13,cursor:"pointer"}}>Service done — set the next service due</label>
+                </div>
+                {form.serviceDone && (
+                  <>
+                    <div className="field" style={{marginTop:10,marginBottom:6}}>
+                      <label>Odometer at service (km)</label>
+                      <input type="number" inputMode="decimal" min="0" placeholder={formVehicle.last_service_km ? `last service at ${formVehicle.last_service_km}` : "e.g. 85000"} value={form.serviceKm} onChange={e=>setForm(f=>({...f,serviceKm:e.target.value}))}/>
+                    </div>
+                    <div style={{fontSize:12,color:T.muted}}>
+                      {odometers[form.vehicle] ? `Filled in from the latest fuel log (${odometers[form.vehicle]} km) — correct it if the invoice says otherwise. ` : ""}
+                      {nextServiceText(nextServiceAfter(formVehicle, { date: form.date, km: form.serviceKm }))}
+                    </div>
+                  </>
+                )}
+                {!form.serviceDone && !hasServiceSchedule(formVehicle) && (
+                  <div style={{fontSize:12,color:T.muted,marginTop:6}}>No service interval is set for this vehicle yet — ticking still records today as its last service.</div>
+                )}
+              </div>
+            )}
             <div style={{display:"flex",gap:9}}><button className="btn btn-primary" onClick={addRepair}>Save Repair</button><button className="btn btn-ghost" onClick={()=>setShowForm(false)}>Cancel</button></div>
           </div>
         </div>
@@ -3905,7 +3940,15 @@ function AuthenticatedApp() {
             {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
             {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
             {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
-            {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
+            {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}
+                                     odometers={latestOdometers(locData)}
+                                     onServiceDone={async (vehicleId, svc) => {
+                                       const v = fleet.find(x => x.id === vehicleId);
+                                       if (!v) return;
+                                       const next = applyServiceDone(v, svc);
+                                       await sbFleet.upd(next);
+                                       handleSetFleet(f => f.map(x => x.id === vehicleId ? next : x));
+                                     }}/>}
             {page==="vehicles"  && vehicleRegisterEnabled && <VehicleRegister
                                     locId={locId} locData={locData} fleet={fleet} trips={vehicleTrips} setTrips={setVehicleTrips}
                                     purposes={tripPurposes} setPurposes={setTripPurposes}
@@ -4355,7 +4398,12 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
     // saves typing and makes a gap in the log obvious.
     const last = lastKmByVehicle[id];
     setForm(f=>({...f, vehicle_id:id, start_km: last!=null?String(last):f.start_km }));
+    setTakeOver(true);
   }
+  // Still out with someone else (#549): their trip is closed at this trip's
+  // opening reading when the new trip is saved, unless unticked.
+  const [takeOver, setTakeOver] = useState(true);
+  const openOnPicked = openTripFor(trips, form.vehicle_id);
 
   async function save() {
     setErr("");
@@ -4376,9 +4424,20 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
     if(hasEnd && !(e>=0)) return setErr("That closing reading doesn't look like a number.");
     if(hasEnd && e < s) return setErr("The closing reading can't be lower than the opening one.");
     if(isMaintenanceTrip && !form.job_id) return setErr("Pick the job card this trip was for, so its cost lands on the right job.");
+    // The vehicle is still logged out on an earlier trip (#549).
+    const open = openTripFor(trips, form.vehicle_id);
+    if(open && !takeOver) return setErr(`${vehicleById[form.vehicle_id]?.name||"This vehicle"} is still logged out by ${open.driver_name}. Close that trip first, or tick “close it at this reading”.`);
+    if(open) { const p = takeoverProblem(open, form.start_km); if(p) return setErr(p); }
 
     setSaving(true);
     try {
+      if(open) {
+        const patch = takeoverPatch(open, { newStartKm: s, newDriver: driver, today: todayISO() });
+        await sb.patch("vehicle_trips", open.id, patch);
+        setTrips(p=>p.map(x=>x.id===open.id
+          ? {...x, ...patch, km:patch.end_km-Number(x.start_km), trip_cost:(x.cost_per_km||0)*(patch.end_km-Number(x.start_km))}
+          : x));
+      }
       const row = {
         id: uid(), company_id: companyId, location_id: locFilter==="all"?locId:locFilter,
         vehicle_id: form.vehicle_id, purpose_id: form.purpose_id,
@@ -4578,6 +4637,15 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
               placeholder="Search vehicles…"/>
             {(requirement||needsPdp) && (
               <div className="help">{pickedVehicle.name} needs {requirement?`Code ${requirement}`:"a licence"}{needsPdp?" + PDP":""}. Staff without it are greyed with the reason.</div>
+            )}
+            {openOnPicked && (
+              <div className="help" style={{color:T.warn}}>
+                &#9888; Still logged out by <b>{openOnPicked.driver_name}</b> since {openOnPicked.trip_date} ({fmtNum(openOnPicked.start_km)} km).
+                <label style={{display:"flex",alignItems:"center",gap:7,marginTop:6,color:T.cream,cursor:"pointer"}}>
+                  <input type="checkbox" checked={takeOver} onChange={e=>setTakeOver(e.target.checked)} style={{accentColor:T.gold,width:15,height:15}}/>
+                  Close {openOnPicked.driver_name}'s trip at this trip's opening reading
+                </label>
+              </div>
             )}
           </div>
           <div className="field"><label>Date</label>
