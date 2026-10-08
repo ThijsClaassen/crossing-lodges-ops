@@ -18,6 +18,8 @@ import { COST_KINDS, KIND_LABEL, PERIODS, runningCostsFor } from "./runningCosts
 import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
 import { listMembers as listBillingMembers, logMemberPurchase } from "./memberPurchase.js";
 import { isoDate, todayIso } from './dates.js'
+import { newestFirst, dateKey } from './newestFirst.js'
+import { meterFlags } from './meterChecks.js'
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 const fmtR = n => `R ${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -152,6 +154,18 @@ function AttachSlipButton({ companyId, locId, onAttached, label="Attach slip" })
 // ─── SHARED SMALL COMPONENTS ─────────────────────────────────────────────────
 // ─── DATE FIELD ───────────────────────────────────────────────────────────────
 // Uses native date picker (opens phone calendar), stores as DD/MM/YYYY
+// A small warning under a fuel issue's date when its meter or mileage reading
+// doesn't follow on from the one before it (see meterChecks.js). Hover or tap
+// for the reason.
+function MeterFlag({ msgs }) {
+  if (!msgs || !msgs.length) return null;
+  return (
+    <div title={msgs.join("\n")} style={{fontSize:10.5,color:T.warn,fontWeight:600,marginTop:2,cursor:"help",whiteSpace:"normal",maxWidth:150,lineHeight:1.3}}>
+      ⚠ {msgs.length===1 ? "check meter" : `${msgs.length} meter checks`}
+    </div>
+  );
+}
+
 function DateField({ value, onChange }) {
   return (
     <input
@@ -493,9 +507,14 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
   // meaningless — only the newest row was ever trustworthy. Each dip is now
   // measured against what the tank should have held on the day it was dipped,
   // which is the only comparison that says anything about that day.
-  const theoreticalAsOf = useCallback((iso) => {
+  // (2026-10-08) Dips, deliveries and issues carry DD/MM/YYYY text, transfers
+  // ISO dates. Compared as text, "05/02" sorted before "28/01", so a dip's
+  // theoretical figure silently dropped or added rows across a month change.
+  // Everything is compared as a real date (dateKey) now.
+  const theoreticalAsOf = useCallback((when) => {
+    const iso = dateKey(when);
     const upto = (rows, pick) => (rows||[])
-      .filter(r => String(r.date||"") <= String(iso))
+      .filter(r => !dateKey(r.date) || dateKey(r.date) <= iso)
       .reduce((sum, r) => sum + (Number(pick(r))||0), 0);
     const t = transferEffectAsOf(transfers, { domain:"diesel", locationId:locId, asOf:iso });
     return (opening||0) + upto(deliveries, d=>d.litres) - upto(issues, i=>i.litres) + t.netUnits;
@@ -513,7 +532,13 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
   // when someone typed it in. Array.sort is stable, so dips sharing a date keep
   // their created_at.desc order and the most recently entered one wins.
   const dipsNewestFirst = useMemo(
-    ()=>[...dips].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))),[dips]);
+    ()=>newestFirst(dips),[dips]);
+  // Newest first by their own date (#564/#565) — what you see is the order
+  // the fuel moved, so a late-entered issue sits at its own date and the meter
+  // readings can be read down the list. meterFlags marks the ones that don't add up.
+  const issuesNewestFirst     = useMemo(()=>newestFirst(issues),[issues]);
+  const deliveriesNewestFirst = useMemo(()=>newestFirst(deliveries),[deliveries]);
+  const issueFlags            = useMemo(()=>meterFlags(issues,{pumpMeter:true}),[issues]);
   const latestDip      = dipsNewestFirst[0] || null;
   const lastDip        = latestDip ? latestDip.litres : null;
   const variance       = lastDip!==null?lastDip-theoretical:null;
@@ -583,9 +608,9 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
           <div className="tbl-wrap"><table className="tbl">
             <thead><tr><th>Date</th><th>Open Meter</th><th>Close Meter</th><th className="num">Litres</th><th>Vehicle</th><th>Mileage</th><th>Notes</th><th></th></tr></thead>
             <tbody>
-              {issues.map(i=>(
+              {issuesNewestFirst.map(i=>(
                 <tr key={i.id}>
-                  <td className="mono" style={{fontSize:12}}>{i.date}</td>
+                  <td className="mono" style={{fontSize:12}}>{i.date}<MeterFlag msgs={issueFlags[i.id]}/></td>
                   <td className="num mono">{i.open}</td>
                   <td className="num mono">{i.close}</td>
                   <td className="num" style={{color:T.fuel_d,fontWeight:700}}>{i.litres}</td>
@@ -622,7 +647,7 @@ function DieselInventory({ locId, loc, setLoc, fleet, isAdmin, companyId, slips,
           <div className="tbl-wrap"><table className="tbl">
             <thead><tr><th>Date</th><th className="num">Litres</th><th className="num">Price/L</th><th className="num">Total</th><th>Supplier</th><th>Invoice</th><th>Notes</th><th>Slip</th><th></th></tr></thead>
             <tbody>
-              {deliveries.map(d=>(
+              {deliveriesNewestFirst.map(d=>(
                 <tr key={d.id}>
                   <td className="mono" style={{fontSize:12}}>{d.date}</td>
                   <td className="num ok" style={{fontWeight:700}}>{fmtL(d.litres)}</td>
@@ -822,6 +847,10 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
   const [iForm,setIForm]=useState({date:today(),litres:"",vehicle:"",mileage:"",notes:""});
 
   const {petrolPurchases:purchases,petrolIssues:issues,petrolOpening:opening}=loc;
+  // Newest first by their own date, mileage checked per vehicle (#564/#565).
+  const issuesNewestFirst    = useMemo(()=>newestFirst(issues),[issues]);
+  const purchasesNewestFirst = useMemo(()=>newestFirst(purchases),[purchases]);
+  const issueFlags           = useMemo(()=>meterFlags(issues),[issues]);
   const stationOptions = useMemo(
     ()=>[...new Set((purchases||[]).map(x=>x.station).filter(Boolean))].sort(),[purchases]);
   const upd=patch=>setLoc(l=>({...l,...patch}));
@@ -891,9 +920,9 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
           <div className="tbl-wrap"><table className="tbl">
             <thead><tr><th>Date</th><th className="num">Litres</th><th>Vehicle</th><th>Mileage</th><th>Notes</th><th></th></tr></thead>
             <tbody>
-              {issues.map(i=>(
+              {issuesNewestFirst.map(i=>(
                 <tr key={i.id}>
-                  <td className="mono" style={{fontSize:12}}>{i.date}</td>
+                  <td className="mono" style={{fontSize:12}}>{i.date}<MeterFlag msgs={issueFlags[i.id]}/></td>
                   <td className="num" style={{color:T.fuel_p,fontWeight:700}}>{Math.abs(i.litres)}</td>
                   <td>{i.vehicle
                     /* Show the vehicle's NAME, not its raw id. The summary
@@ -929,7 +958,7 @@ function PetrolInventory({ loc, setLoc, fleet, locId, companyId, slips, onSlipAt
           <div className="tbl-wrap"><table className="tbl">
             <thead><tr><th>Date</th><th className="num">Litres</th><th className="num">Price/L</th><th className="num">Total</th><th>Station</th><th>Notes</th><th>Slip</th><th></th></tr></thead>
             <tbody>
-              {purchases.map(p=>(
+              {purchasesNewestFirst.map(p=>(
                 <tr key={p.id}>
                   <td className="mono" style={{fontSize:12}}>{p.date}</td>
                   <td className="num ok" style={{fontWeight:700}}>{fmtL(p.litres)}</td>
@@ -1645,7 +1674,7 @@ function Repairs({ loc, setLoc, fleet, isAdmin, locId, companyId, slips, onSlipA
       <div className="tbl-wrap"><table className="tbl">
         <thead><tr><th>Date</th><th>Vehicle</th><th>Workshop</th><th>Description</th><th className="num">Labour</th><th className="num">Parts</th><th className="num">Total</th><th>Invoice</th><th>Slip</th><th></th></tr></thead>
         <tbody>
-          {repairs.map(r=>(
+          {newestFirst(repairs).map(r=>(
             <tr key={r.id} style={{cursor:"pointer"}} onClick={()=>setViewEntry(r)}>
               <td className="mono" style={{fontSize:12}}>{r.date}</td>
               <td style={{fontWeight:600}}>{fleet.find(v=>v.id===r.vehicle)?.name||r.vehicle||<span style={{color:T.muted}}>—</span>}</td>
@@ -3654,17 +3683,17 @@ function AuthenticatedApp() {
       LOCATIONS.forEach(l => { nd[l.id] = emptyLoc(); });
       LOCATIONS.forEach(l => {
         const lid = l.id;
-        nd[lid].dieselDeliveries = dDel.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,pricePerLitre:+r.price_per_litre,supplier:r.supplier||"",invoiceNo:r.invoice_no||"",notes:r.notes||"",slipId:r.slip_id||null}));
-        nd[lid].dieselIssues     = dIss.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,open:+r.open_meter,close:+r.close_meter,litres:+r.litres,vehicle:r.vehicle_id||"",mileage:r.mileage||"",notes:r.notes||""}));
-        nd[lid].dieselDips       = dDips.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,notes:r.notes||""}));
+        nd[lid].dieselDeliveries = dDel.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,created_at:r.created_at||null,litres:+r.litres,pricePerLitre:+r.price_per_litre,supplier:r.supplier||"",invoiceNo:r.invoice_no||"",notes:r.notes||"",slipId:r.slip_id||null}));
+        nd[lid].dieselIssues     = dIss.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,created_at:r.created_at||null,open:+r.open_meter,close:+r.close_meter,litres:+r.litres,vehicle:r.vehicle_id||"",mileage:r.mileage||"",notes:r.notes||""}));
+        nd[lid].dieselDips       = dDips.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,created_at:r.created_at||null,litres:+r.litres,notes:r.notes||""}));
         nd[lid].dieselOpening    = +(dOpen.find(r=>r.location_id===lid)?.litres||0);
-        nd[lid].petrolPurchases  = pPurch.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,pricePerLitre:+r.price_per_litre,station:r.station||"",notes:r.notes||"",slipId:r.slip_id||null}));
-        nd[lid].petrolIssues     = pIss.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,litres:+r.litres,vehicle:r.vehicle_id||"",mileage:r.mileage||"",notes:r.notes||""}));
+        nd[lid].petrolPurchases  = pPurch.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,created_at:r.created_at||null,litres:+r.litres,pricePerLitre:+r.price_per_litre,station:r.station||"",notes:r.notes||"",slipId:r.slip_id||null}));
+        nd[lid].petrolIssues     = pIss.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,created_at:r.created_at||null,litres:+r.litres,vehicle:r.vehicle_id||"",mileage:r.mileage||"",notes:r.notes||""}));
         nd[lid].petrolOpening    = +(pOpen.find(r=>r.location_id===lid)?.litres||0);
         nd[lid].parts            = partsRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,description:r.description,storeroom:r.storeroom||"",shelf:r.shelf||"",location:r.position||"",unit:r.unit||"each",openCost:+r.open_cost,openQty:+r.open_qty,purchaseQty:+r.purchase_qty,purchaseCost:+r.purchase_cost,purchaseFrom:r.purchase_from||"",closingQty:+r.closing_qty,issues:r.issues||{}}));
         nd[lid].partIssues       = partIssRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date||"",partId:r.part_id,vehicle:r.vehicle_id||"",qty:+r.qty,notes:r.notes||""}));
         nd[lid].partPurchases    = partPurchRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,partId:r.part_id,qty:+r.qty,totalCost:+r.total_cost,supplier:r.supplier||"",notes:r.notes||"",slipId:r.slip_id||null}));
-        nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||"",slipId:r.slip_id||null}));
+        nd[lid].repairs          = repRows.filter(r=>r.location_id===lid).map(r=>({id:r.id,date:r.date,created_at:r.created_at||null,vehicle:r.vehicle_id||"",workshop:r.workshop||"",invoiceNo:r.invoice_no||"",description:r.description||"",labourCost:+r.labour_cost,partsCost:+r.parts_cost,otherCost:+r.other_cost,totalCost:+r.total_cost,invoiceReceived:r.invoice_received||false,notes:r.notes||"",slipId:r.slip_id||null}));
         // supplier_credit_notes.date is a native Postgres date column (comes
         // back ISO, YYYY-MM-DD) — every other date in this app is stored as
         // free text DD/MM/YYYY, so convert here once rather than special-
