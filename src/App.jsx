@@ -13,6 +13,7 @@ import { resolveCompanyLogo, logoStyle } from "./companyLogo.js";
 import Login from "./Login.jsx";
 import SetPassword from "./SetPassword.jsx";
 import { CompanyProvider, useCompany } from "./CompanyContext.jsx";
+import { noCompanyText } from "./companySwitches.js";
 import { transferEffect, transferEffectAsOf, incomingTransfers, outstandingSent, daysInTransit } from "./transferEngine.js";
 import { COST_KINDS, KIND_LABEL, PERIODS, runningCostsFor } from "./runningCosts.js";
 import { uploadPurchaseSlip, getSlipUrl } from "./slipUpload.js";
@@ -3285,12 +3286,14 @@ function CostSummary({ locData, fleet, serviceJobs, vehicleCosts = [], setVehicl
 
 
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
+// `module`: the module a page belongs to (#560 step 3). Switched off for the
+// company on the founders' site, its pages leave the menu. No module = core.
 const PAGES = [
   { id:"dashboard", label:"Dashboard",     section:"Overview",   adminOnly:true  },
-  { id:"diesel",    label:"Diesel",        section:"Fuel",       adminOnly:false },
-  { id:"petrol",    label:"Petrol",        section:"Fuel",       adminOnly:false },
-  { id:"parts",     label:"Parts & Stock", section:"Mechanical", adminOnly:false },
-  { id:"repairs",   label:"Repairs",       section:"Mechanical", adminOnly:false },
+  { id:"diesel",    label:"Diesel",        section:"Fuel",       adminOnly:false, module:"fuel" },
+  { id:"petrol",    label:"Petrol",        section:"Fuel",       adminOnly:false, module:"fuel" },
+  { id:"parts",     label:"Parts & Stock", section:"Mechanical", adminOnly:false, module:"parts" },
+  { id:"repairs",   label:"Repairs",       section:"Mechanical", adminOnly:false, module:"parts" },
   { id:"vehicles",  label:"Vehicle Log",   section:"Mechanical", adminOnly:false, flag:"vehicleRegister" },
   { id:"fleet",     label:"Fleet",         section:"Management", adminOnly:true  },
   { id:"costs",     label:"Cost Summary",  section:"Reports",    adminOnly:true  },
@@ -3539,6 +3542,8 @@ function AuthenticatedApp() {
     switchCompany,
     memberBillingEnabled,
     vehicleRegisterEnabled,
+    moduleOn,
+    noCompany,
   } = useCompany();
 
   const [page,    setPage]    = useState(() => urlParam('page') || "dashboard");
@@ -3738,7 +3743,7 @@ function AuthenticatedApp() {
   // `flag` gates a page on a per-company feature flag (Vehicle Log is Demo-only
   // while it's being trialled). A page with no flag behaves exactly as before.
   const featureFlags = { vehicleRegister: vehicleRegisterEnabled };
-  const visiblePages = PAGES.filter(p => (isAdmin || !p.adminOnly) && (!p.flag || featureFlags[p.flag]));
+  const visiblePages = PAGES.filter(p => (isAdmin || !p.adminOnly) && (!p.flag || featureFlags[p.flag]) && (!p.module || moduleOn(p.module)));
   // Android back button → the first page (#555).
   useBackToHome({ page, setPage, home: visiblePages[0]?.id });
   const sections  = [...new Set(visiblePages.map(p=>p.section))];
@@ -3749,6 +3754,9 @@ function AuthenticatedApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, isAdmin, featureFlags]);
   const current   = PAGES.find(p=>p.id===page);
+  // A switched-off module's page never renders, even for the one render
+  // before the effect above moves away from it (#560 step 3).
+  const canSee = (id) => visiblePages.some(p => p.id === id);
   const locColor  = LOC_COLORS[locId];
   const locName   = LOCATIONS.find(l=>l.id===locId)?.name;
   const now        = new Date();
@@ -3783,7 +3791,7 @@ function AuthenticatedApp() {
   if (!companyId) {
     return (
       <AuthMessageScreen>
-        <p style={{marginBottom:12}}>Your account isn't linked to any company yet. Contact your administrator to get access.</p>
+        <p style={{marginBottom:12}}>{noCompanyText(noCompany, "Operations")}</p>
         <button className="btn btn-primary" onClick={logout}>Log out</button>
       </AuthMessageScreen>
     );
@@ -3969,10 +3977,10 @@ function AuthenticatedApp() {
 
           <div className="section">
             {page==="dashboard" && isAdmin && <Dashboard locId={locId} loc={loc} fleet={fleet} locData={locData} serviceJobs={serviceJobs}/>}
-            {page==="diesel"    && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
-            {page==="petrol"    && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
-            {page==="parts"     && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
-            {page==="repairs"   && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}
+            {page==="diesel" && canSee("diesel") && <DieselInventory locId={locId} loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
+            {page==="petrol" && canSee("petrol") && <PetrolInventory loc={loc} setLoc={setLoc} fleet={fleet} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached} transfers={transfers} onTransfersChanged={loadAll}/>}
+            {page==="parts" && canSee("parts") && <PartsStock loc={loc} locId={locId} setLoc={setLoc} isAdmin={isAdmin} fleet={fleet} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}/>}
+            {page==="repairs" && canSee("repairs") && <Repairs loc={loc} setLoc={setLoc} fleet={fleet} isAdmin={isAdmin} locId={locId} companyId={companyId} slips={slips} onSlipAttached={onSlipAttached}
                                      odometers={latestOdometers(locData)}
                                      onServiceDone={async (vehicleId, svc) => {
                                        const v = fleet.find(x => x.id === vehicleId);
