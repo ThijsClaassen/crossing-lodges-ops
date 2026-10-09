@@ -33,7 +33,7 @@ check('log-a-trip has NO tabs — one screen', !/tabs=\{/.test(logDrawer) && !/o
 for (const field of ['Vehicle', 'Date', 'Driver', 'Purpose', 'Odometer — start', 'Odometer — end', 'Notes (optional)'])
   check(`field on the one screen: ${field}`, logDrawer.includes(`<label>${field}`))
 check('driver name box appears only when nobody from the staff list is picked', /!form\.driver_employee_id \? \(/.test(logDrawer))
-check('job card box appears only for a maintenance purpose', /isMaintenanceTrip \? \(/.test(logDrawer))
+check('job card box appears only for a maintenance purpose (and only with a Maintenance app, #561)', /isMaintenanceTrip && hasMaint \? \(/.test(logDrawer))
 check('save / start trip lives in the drawer footer', /form\.end_km===""\?"Start trip":"Save trip"/.test(vr) && /footer=\{tripFooter\}/.test(vr))
 check('save logic unchanged: driver gate, odometer checks, job card required for maintenance', /Pick a qualified driver, or fix the licence in HR first/.test(vr) && /The closing reading can't be lower than the opening one/.test(vr) && /so its cost lands on the right job/.test(vr))
 check('rate is still snapshotted on the row', /cost_per_km: rate,/.test(vr))

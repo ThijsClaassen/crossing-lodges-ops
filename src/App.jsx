@@ -235,16 +235,19 @@ function Dashboard({ locId, loc, fleet, locData, serviceJobs }) {
     return s+iss.qty*unitCost;
   },0);
   const locColor = LOC_COLORS[locId];
+  // Tiles for a module the company doesn't have stay off (#561).
+  const { moduleOn } = useCompany();
+  const hasFuel = moduleOn("fuel"), hasParts = moduleOn("parts");
 
   return (
     <>
       <FleetAlerts fleet={fleet} locData={locData||{}} serviceJobs={serviceJobs}/>
 
       <div className="kpi-row">
-        <KPI label="Diesel Issued" value={fmtL(dieselIssued)} sub="From bulk tank this month" accent={T.fuel_d} pct={dieselIssued/500*100}/>
-        <KPI label="Petrol Issued" value={fmtL(petrolIssued)} sub="From jerrycan stock" accent={T.fuel_p} pct={petrolIssued/100*100}/>
-        <KPI label="External Repairs" value={fmtR(totalRepairs)} sub="Workshop invoices" accent={T.ok}/>
-        <KPI label="Parts Issued" value={fmtR(totalParts)} sub="At weighted avg cost" accent={T.gold}/>
+        {hasFuel && <KPI label="Diesel Issued" value={fmtL(dieselIssued)} sub="From bulk tank this month" accent={T.fuel_d} pct={dieselIssued/500*100}/>}
+        {hasFuel && <KPI label="Petrol Issued" value={fmtL(petrolIssued)} sub="From jerrycan stock" accent={T.fuel_p} pct={petrolIssued/100*100}/>}
+        {hasParts && <KPI label="External Repairs" value={fmtR(totalRepairs)} sub="Workshop invoices" accent={T.ok}/>}
+        {hasParts && <KPI label="Parts Issued" value={fmtR(totalParts)} sub="At weighted avg cost" accent={T.gold}/>}
       </div>
       <div className="section">
         <div className="section-title">Fleet Activity at {LOCATIONS.find(l=>l.id===locId)?.name}</div>
@@ -3543,6 +3546,8 @@ function AuthenticatedApp() {
     memberBillingEnabled,
     vehicleRegisterEnabled,
     moduleOn,
+    appOn,
+    isOn,
     noCompany,
   } = useCompany();
 
@@ -3636,12 +3641,15 @@ function AuthenticatedApp() {
         sb.select("vehicle_trip_purposes", `${cf}&active=eq.true`).catch(()=>[]),
         // Drivers come from HR (cross-app read, same Supabase project) so the
         // dropdown holds real staff names rather than free text that drifts.
-        sb.select("hr_employees", `active=eq.true&${cf}`).catch(()=>[]),
+        // Only with the HR app (#561); without it the driver's name is typed.
+        appOn("hr_linen") ? sb.select("hr_employees", `active=eq.true&${cf}`).catch(()=>[]) : Promise.resolve([]),
         // Open job cards, for attaching a maintenance trip to one.
-        sb.select("maint_jobs", `${cf}&status=in.(scheduled,in_progress,completed)`).catch(()=>[]),
+        // Only with the Maintenance app (#561).
+        appOn("maintenance") ? sb.select("maint_jobs", `${cf}&status=in.(scheduled,in_progress,completed)`).catch(()=>[]) : Promise.resolve([]),
         // Running costs + depreciation (#488). Only assets linked to a vehicle.
         sb.select("vehicle_costs", cf).catch(()=>[]),
-        sb.select("fixed_assets", `${cf}&fleet_id=not.is.null&select=id,description,fleet_id,purchase_date,cost_price,depreciation_rate,useful_life_years,disposal_date`).catch(()=>[]),
+        // Depreciation per vehicle only with Finance › Fixed assets (#561).
+        isOn("finance", "assets") ? sb.select("fixed_assets", `${cf}&fleet_id=not.is.null&select=id,description,fleet_id,purchase_date,cost_price,depreciation_rate,useful_life_years,disposal_date`).catch(()=>[]) : Promise.resolve([]),
       ]);
       setVehicleCosts(costRows||[]);
       setVehicleAssets(assetRows||[]);
@@ -3717,7 +3725,10 @@ function AuthenticatedApp() {
         service_interval_km: r.service_interval_km==null?null:+r.service_interval_km,
         license_expiry: r.license_expiry||"",
       }));
-      syncServiceJobs(fleetForSync, nd, companyId).then(setServiceJobs);
+      // Only into a Maintenance app the company has (#561); without it the
+      // service-due alert stays here in Ops.
+      if (appOn("maintenance")) syncServiceJobs(fleetForSync, nd, companyId).then(setServiceJobs);
+      else setServiceJobs({});
     } catch(e) {
       setLoadErr(e.message);
     } finally {
@@ -4340,6 +4351,10 @@ function SearchableSelect({ value, onChange, options, placeholder = "Select…",
 // exercise: internal invoices that carry the real vehicle cost of getting
 // someone to the job, not just their time and parts.
 function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, setPurposes, hrEmployees, jobs, isAdmin, companyId, vehicleCosts = [], assets = [] }) {
+  // A maintenance trip is put on a Maintenance job card — when the company
+  // has that app (#561). Without it the trip is logged without one.
+  const { appOn } = useCompany();
+  const hasMaint = appOn("maintenance");
   const blank = { vehicle_id:"", trip_date:todayISO(), driver_employee_id:"", driver_name:"",
                   purpose_id:"", start_km:"", end_km:"", job_id:"", notes:"" };
   const [form, setForm] = useState(blank);
@@ -4463,7 +4478,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
     const e = hasEnd ? parseFloat(form.end_km) : null;
     if(hasEnd && !(e>=0)) return setErr("That closing reading doesn't look like a number.");
     if(hasEnd && e < s) return setErr("The closing reading can't be lower than the opening one.");
-    if(isMaintenanceTrip && !form.job_id) return setErr("Pick the job card this trip was for, so its cost lands on the right job.");
+    if(isMaintenanceTrip && hasMaint && !form.job_id) return setErr("Pick the job card this trip was for, so its cost lands on the right job.");
     // The vehicle is still logged out on an earlier trip (#549).
     const open = openTripFor(trips, form.vehicle_id);
     if(open && !takeOver) return setErr(`${vehicleById[form.vehicle_id]?.name||"This vehicle"} is still logged out by ${open.driver_name}. Close that trip first, or tick “close it at this reading”.`);
@@ -4489,7 +4504,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
         driver_qualified: driverCheck ? !!driverCheck.qualifies : null,
         driver_licence_class: driverCheck?.licence_class || null,
         start_km: s, end_km: e,   // null while the vehicle is still out
-        job_id: isMaintenanceTrip ? (form.job_id || null) : null,
+        job_id: isMaintenanceTrip && hasMaint ? (form.job_id || null) : null,
         // Snapshot the derived rate as it stands today. It's frozen here on
         // purpose: the underlying cost/km keeps moving as fuel and repairs are
         // logged, and an invoice that silently restates itself months later
@@ -4724,7 +4739,7 @@ function VehicleRegister({ locId, locData, fleet, trips, setTrips, purposes, set
               {purposes.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
-          {isMaintenanceTrip ? (
+          {isMaintenanceTrip && hasMaint ? (
             <div className="field"><label>Job card</label>
               <SearchableSelect
                 value={form.job_id}
